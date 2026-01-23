@@ -9,9 +9,9 @@ cmds = ["bun install"]
 
 [phases.build]
 cmds = [
-  "bun run db:migrate",
-  "cd web && bun run build"
+  "bun --cwd packages/internal run db:migrate",
+  "bun --cwd web run build"
 ]
 
 [start]
-cmd = "cd web && bun run start"
+cmd = "bun --cwd web run start"

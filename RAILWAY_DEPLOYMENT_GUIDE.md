@@ -176,15 +176,15 @@ After your first deployment, you need to run database migrations:
 railway link
 
 # Run migrations
-railway run bun run db:migrate
+railway run bun --cwd packages/internal run db:migrate
 ```
 
-Or you can add this to your build command in `railway.json`:
+Or you can add this to your build command in `railway.json` (already configured):
 
 ```json
 {
   "build": {
-    "buildCommand": "bun install && bun run db:migrate && bun run build"
+    "buildCommand": "bun install && bun --cwd packages/internal run db:migrate && bun --cwd web run build"
   }
 }
 ```
