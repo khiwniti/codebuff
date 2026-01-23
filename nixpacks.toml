@@ -1,0 +1,17 @@
+# Nixpacks configuration for Codebuff deployment
+# This configures the build environment for Railway
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "bun", "openssl"]
+
+[phases.install]
+cmds = ["bun install"]
+
+[phases.build]
+cmds = [
+  "bun run db:migrate",
+  "cd web && bun run build"
+]
+
+[start]
+cmd = "cd web && bun run start"
