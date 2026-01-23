@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: codebuff-litellm
+    ports:
+      - "8000:8000"
+    environment:
+      # Your GitHub Copilot token (get with: gh copilot token)
+      - GITHUB_COPILOT_TOKEN=${GITHUB_COPILOT_TOKEN}
+      # Master key for LiteLLM (change this!)
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-litellm-change-this-key}
+      # Optional: Enable debug mode
+      - LITELLM_LOG=DEBUG
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "8000", "--host", "0.0.0.0"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: codebuff-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  default:
+    name: codebuff-network
