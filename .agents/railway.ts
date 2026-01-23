@@ -24,10 +24,9 @@ const definition: AgentDefinition = {
       type: 'stdio',
       command: 'npx',
       args: ['-y', '@railway/mcp-server'],
-      // Optional: Uncomment if you want to use a Railway token
-      // env: {
-      //   RAILWAY_TOKEN: '$RAILWAY_TOKEN',
-      // },
+      env: {
+        RAILWAY_TOKEN: '96228570-8476-410a-908c-392201f30c1d',
+      },
     },
   },
 
