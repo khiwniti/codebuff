@@ -9,9 +9,8 @@ cmds = ["bun install"]
 
 [phases.build]
 cmds = [
-  "bun --cwd packages/internal run db:migrate",
   "bun --cwd web run build"
 ]
 
 [start]
-cmd = "bun --cwd web run start"
+cmd = "node web/test-server.js"
