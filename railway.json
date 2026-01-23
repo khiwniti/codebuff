@@ -5,7 +5,7 @@
     "buildCommand": "bun install && bun --cwd web run build"
   },
   "deploy": {
-    "startCommand": "bun --cwd packages/internal run db:migrate && bun --cwd web run start",
+    "startCommand": "bun --cwd web run start",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 100,
     "restartPolicyType": "ON_FAILURE",
