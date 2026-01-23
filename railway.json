@@ -5,7 +5,7 @@
     "buildCommand": "bun install && bun --cwd web run build"
   },
   "deploy": {
-    "startCommand": "bun --cwd web run start",
+    "startCommand": "cd web && next start -p ${PORT:-3000}",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 100,
     "restartPolicyType": "ON_FAILURE",
