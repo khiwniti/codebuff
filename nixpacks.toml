@@ -8,9 +8,7 @@ nixPkgs = ["nodejs_20", "bun", "openssl"]
 cmds = ["bun install"]
 
 [phases.build]
-cmds = [
-  "bun --cwd web run build"
-]
+cmds = ["bun --cwd web run build"]
 
 [start]
-cmd = "node web/test-server.js"
+cmd = "cd web && node_modules/.bin/next start -p ${PORT:-3000}"
