@@ -1,0 +1,13 @@
+# Railway Configuration for CodeBuff
+# Uses custom Dockerfile for reliable deployment
+
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "node web/node_modules/.bin/next start"
+healthcheckPath = "/api/healthz"
+healthcheckTimeout = 100
+restartPolicyType = "on-failure"
+restartPolicyMaxRetries = 3

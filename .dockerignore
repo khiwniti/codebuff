@@ -1,0 +1,77 @@
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Build outputs
+.next
+.turbo
+out
+dist
+build
+*.tsbuildinfo
+
+# Testing
+coverage
+.nyc_output
+*.test.ts
+*.spec.ts
+__tests__
+**/__tests__/**
+
+# Development
+.env*.local
+.env.development
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+docs
+.github
+
+# CI/CD
+.gitlab-ci.yml
+.travis.yml
+.circleci
+
+# Logs
+logs
+*.log
+
+# OS
+Thumbs.db
+
+# Misc
+.contentlayer
+.eslintcache
+.prettierignore
+.husky
+
+# Railway specific
+railway.json
+nixpacks.toml
+test-*.sh
+cleanup-*.sh
+setup-*.sh
+RAILWAY_*.md
+
+# Agents
+.agents
+
+# Evals
+evals
+
+# CLI (not needed for web deployment)
+cli
