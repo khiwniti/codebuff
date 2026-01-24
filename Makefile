@@ -11,44 +11,49 @@ help:
 	@echo "🚀 Codebuff Development Commands"
 	@echo ""
 	@echo "Setup:"
-	@echo "  install     Install all dependencies"
-	@echo "  dev         Start all services (web + CLI)"
-	@echo "  setup       Full setup for new contributors"
+	@echo "  install       Install all dependencies"
+	@echo "  dev          Start all services (web + CLI)"
+	@echo "  setup        Full setup for new contributors"
+	@echo "  quick        Install + dev (one-click setup)"
 	@echo ""
 	@echo "Individual Services:"
-	@echo "  web         Start web server only"
-	@echo "  cli         Start CLI only"
-	@echo "  db          Start database only"
-	@echo "  studio      Open Drizzle Studio (DB GUI)"
+	@echo "  web          Start web server only"
+	@echo "  cli          Start CLI only"
+	@echo "  db           Start database only"
+	@echo "  studio       Open Drizzle Studio (DB GUI)"
 	@echo ""
 	@echo "Development:"
-	@echo "  test        Run all tests"
-	@echo "  typecheck   Type check all packages"
-	@echo "  format      Format all files with Prettier"
-	@echo "  clean       Clean dependencies and build artifacts"
-	@echo "  watch       Run format + typecheck + test"
+	@echo "  test         Run all tests"
+	@echo "  typecheck    Type check all packages"
+	@echo "  format       Format all files with Prettier"
+	@echo "  clean        Clean dependencies and build artifacts"
+	@echo "  watch        Run format + typecheck + test"
+	@echo ""
+	@echo "Health & Troubleshooting:"
+	@echo "  health       Check service health"
+	@echo "  troubleshoot Fix browser connection issues"
 	@echo ""
 	@echo "Build:"
-	@echo "  build       Build all packages"
-	@echo "  build-web   Build web package"
-	@echo "  build-sdk   Build SDK package"
+	@echo "  build        Build all packages"
+	@echo "  build-web    Build web package"
+	@echo "  build-sdk    Build SDK package"
 	@echo ""
 	@echo "Deployment (Railway):"
-	@echo "  deploy-setup Complete Railway setup wizard"
-	@echo "  deploy      Deploy to Railway"
-	@echo "  deploy-logs View Railway logs"
-	@echo "  deploy-shell Open Railway shell"
-	@echo "  deploy-status Check Railway status"
-	@echo "  deploy-vars List Railway variables"
-	@echo "  domain-setup Guide for custom domain setup"
-	@echo "  cli-cloud   Configure CLI for cloud usage"
+	@echo "  deploy-setup   Complete Railway setup wizard"
+	@echo "  deploy        Deploy to Railway"
+	@echo "  deploy-logs   View Railway logs"
+	@echo "  deploy-shell   Open Railway shell"
+	@echo "  deploy-status  Check Railway status"
+	@echo "  deploy-vars    List Railway variables"
+	@echo "  domain-setup  Guide for custom domain setup"
+	@echo "  cli-cloud     Configure CLI for cloud usage"
 	@echo ""
 	@echo "Utilities:"
-	@echo "  publish     Publish base agents to database"
-	@echo "  status      Check service status"
-	@echo "  up          Alias for dev"
-	@echo "  down        Stop all services"
-	@echo "  restart     Restart all services"
+	@echo "  publish      Publish base agents to database"
+	@echo "  status       Check service status"
+	@echo "  up           Alias for dev"
+	@echo "  down         Stop all services"
+	@echo "  restart      Restart all services"
 
 # Setup commands
 install:
@@ -187,3 +192,46 @@ restart: down web
 # Common development workflow
 watch: format typecheck test
 	@echo "👀 Development checks complete"
+
+# Troubleshooting
+troubleshoot:
+	@echo "🔧 CLI Browser Connection Troubleshooting"
+	@echo "=========================================="
+	@echo ""
+	@echo "🚨 Issue: 'Unable to connect browser' when trying to login"
+	@echo ""
+	@echo "🛠️ Quick Fix:"
+	@echo "1. Start web server first: make web"
+	@echo "2. Then start CLI: make cli"
+	@echo "3. Try login again"
+	@echo ""
+	@echo "🔍 Check web server:"
+	@echo "curl http://localhost:4242/api/healthz"
+	@echo ""
+	@echo "📖 Full guide: CLI_TROUBLESHOOTING.md"
+
+# Health check
+health:
+	@echo "🏥 Checking Codebuff services health..."
+	@echo ""
+	@echo "📊 Web Server:"
+	@if curl -s http://localhost:4242/api/healthz > /dev/null; then \
+		echo "✅ Web server: RUNNING (http://localhost:4242)"; \
+	else \
+		echo "❌ Web server: NOT RUNNING"; \
+	fi
+	@echo ""
+	@echo "🗄️ Database:"
+	@if docker ps | grep -q "manicode-db-1"; then \
+		echo "✅ Database: RUNNING"; \
+	else \
+		echo "❌ Database: NOT RUNNING"; \
+	fi
+	@echo ""
+	@echo "📱 CLI Environment:"
+	@if [ -f .env.local ]; then \
+		echo "✅ Environment file: EXISTS"; \
+		grep NEXT_PUBLIC_CODEBUFF_APP_URL .env.local || echo "⚠️  NEXT_PUBLIC_CODEBUFF_APP_URL not set"; \
+	else \
+		echo "❌ Environment file: MISSING"; \
+	fi
