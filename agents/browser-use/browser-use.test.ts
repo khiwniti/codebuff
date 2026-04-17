@@ -190,7 +190,7 @@ async function main() {
   console.log(`\n${passed}/${results.length} tasks passed`)
 }
 
-if (import.meta.main) {
+if (import.meta.main && process.env.RUN_BROWSER_USE_E2E === '1') {
   main().catch((err) => {
     console.error('Fatal error:', err)
     process.exit(1)

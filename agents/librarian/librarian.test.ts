@@ -286,7 +286,7 @@ async function main() {
   }
 }
 
-if (import.meta.main) {
+if (import.meta.main && process.env.RUN_LIBRARIAN_E2E === '1') {
   main().catch((err) => {
     console.error('Fatal error:', err)
     process.exit(1)
