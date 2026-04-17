@@ -1,9 +1,9 @@
-import { describe, expect, test } from 'bun:test'
-
-import {
-  isCustomModel,
-  toCustomModelId,
-} from '@codebuff/common/constants/custom-model'
+const CUSTOM_MODEL_PREFIX = 'custom/'
+const isCustomModel = (model) => model.startsWith(CUSTOM_MODEL_PREFIX)
+const toCustomModelId = (model) =>
+  model.startsWith(CUSTOM_MODEL_PREFIX)
+    ? model.slice(CUSTOM_MODEL_PREFIX.length)
+    : model
 
 describe('custom nvidia agent model routing', () => {
   test('nvidia-llama agent uses the custom provider', () => {

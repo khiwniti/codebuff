@@ -10,22 +10,17 @@
  * If taskIndex is provided, runs only that task (0-based). Otherwise runs all tasks.
  */
 
-import * as fs from 'fs'
-import * as path from 'path'
-
-import { CodebuffClient, loadLocalAgents } from '@codebuff/sdk'
-
-import type { AgentDefinition } from '@codebuff/sdk'
+const fs = require('fs')
+const path = require('path')
+const { CodebuffClient, loadLocalAgents } = require('@codebuff/sdk')
 
 const TRACE_DIR = path.join(process.cwd(), 'debug', 'browser-agent-traces')
 
-interface TaskDefinition {
-  name: string
-  prompt: string
-  url?: string
-}
+describe.skip('browser-use e2e script runner', () => {
+  test('is script-only and gated by RUN_BROWSER_USE_E2E=1', () => {})
+})
 
-const TASKS: TaskDefinition[] = [
+const TASKS = [
   {
     name: 'wikipedia-search',
     prompt:
@@ -46,19 +41,13 @@ const TASKS: TaskDefinition[] = [
   },
 ]
 
-interface TraceEvent {
-  timestamp: string
-  type: string
-  data: Record<string, unknown>
-}
-
 async function runTask(
-  client: CodebuffClient,
-  task: TaskDefinition,
-  agentDefinitions: AgentDefinition[],
-  taskIndex: number,
-): Promise<{ success: boolean; traceFile: string; output: unknown }> {
-  const events: TraceEvent[] = []
+  client,
+  task,
+  agentDefinitions,
+  taskIndex,
+) {
+  const events = []
   const startTime = Date.now()
 
   console.log(`\n${'='.repeat(60)}`)
@@ -76,7 +65,7 @@ async function runTask(
       events.push({
         timestamp: new Date().toISOString(),
         type: event.type,
-        data: event as Record<string, unknown>,
+        data: event,
       })
 
       if (event.type === 'text') {
@@ -129,7 +118,7 @@ async function runTask(
   if (output?.type === 'error') {
     console.log(`Error: ${output.message}`)
   } else if (output?.type === 'structuredOutput') {
-    const data = output.value as Record<string, unknown> | null
+    const data = output.value
     console.log(`Status: ${data?.overallStatus}`)
     console.log(`Summary: ${data?.summary}`)
     if (data && Array.isArray(data.lessons) && data.lessons.length > 0) {
@@ -159,7 +148,7 @@ async function main() {
   }
 
   const agents = await loadLocalAgents({ agentsPath: path.join(process.cwd(), 'agents'), verbose: true })
-  const agentDefinitions = Object.values(agents) as AgentDefinition[]
+  const agentDefinitions = Object.values(agents)
 
   const browserAgent = agentDefinitions.find((a) => a.id === 'browser-use')
   if (!browserAgent) {
@@ -173,7 +162,7 @@ async function main() {
     cwd: process.cwd(),
   })
 
-  const results: Array<{ name: string; success: boolean; traceFile: string }> = []
+  const results = []
 
   for (const { task, index } of tasksToRun) {
     const result = await runTask(client, task, agentDefinitions, index)
@@ -190,7 +179,7 @@ async function main() {
   console.log(`\n${passed}/${results.length} tasks passed`)
 }
 
-if (import.meta.main && process.env.RUN_BROWSER_USE_E2E === '1') {
+if (require.main === module && process.env.RUN_BROWSER_USE_E2E === '1') {
   main().catch((err) => {
     console.error('Fatal error:', err)
     process.exit(1)

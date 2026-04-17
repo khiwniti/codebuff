@@ -10,22 +10,17 @@
  * If taskIndex is provided, runs only that task (0-based). Otherwise runs all tasks.
  */
 
-import * as fs from 'fs'
-import * as path from 'path'
-
-import { CodebuffClient, loadLocalAgents } from '@codebuff/sdk'
-
-import type { AgentDefinition } from '@codebuff/sdk'
+const fs = require('fs')
+const path = require('path')
+const { CodebuffClient, loadLocalAgents } = require('@codebuff/sdk')
 
 const TRACE_DIR = path.join(process.cwd(), 'debug', 'librarian-traces')
 
-interface TaskDefinition {
-  name: string
-  prompt: string
-  repoUrl: string
-}
+describe.skip('librarian e2e script runner', () => {
+  test('is script-only and gated by RUN_LIBRARIAN_E2E=1', () => {})
+})
 
-const TASKS: TaskDefinition[] = [
+const TASKS = [
   {
     name: 'express-overview',
     prompt:
@@ -40,31 +35,14 @@ const TASKS: TaskDefinition[] = [
   },
 ]
 
-interface TraceEvent {
-  timestamp: string
-  type: string
-  data: Record<string, unknown>
-}
-
-interface LibrarianOutput {
-  answer: string
-  relevantFiles: string[]
-  cloneDir: string
-}
-
 async function runTask(
-  client: CodebuffClient,
-  task: TaskDefinition,
-  agentDefinitions: AgentDefinition[],
-  taskIndex: number,
-): Promise<{
-  success: boolean
-  traceFile: string
-  output: unknown
-  validationErrors: string[]
-}> {
-  const events: TraceEvent[] = []
-  const validationErrors: string[] = []
+  client,
+  task,
+  agentDefinitions,
+  taskIndex,
+) {
+  const events = []
+  const validationErrors = []
   const startTime = Date.now()
 
   console.log(`\n${'='.repeat(60)}`)
@@ -83,7 +61,7 @@ async function runTask(
       events.push({
         timestamp: new Date().toISOString(),
         type: event.type,
-        data: event as Record<string, unknown>,
+        data: event,
       })
 
       if (event.type === 'text') {
@@ -108,7 +86,7 @@ async function runTask(
 
   // Validate structured output
   if (output?.type === 'structuredOutput' && output.value !== null) {
-    const data = output.value as Record<string, unknown>
+    const data = output.value
 
     if (typeof data.answer !== 'string' || !data.answer) {
       validationErrors.push('Missing or empty "answer" field in output')
@@ -138,7 +116,7 @@ async function runTask(
       if (!fs.existsSync(data.cloneDir)) {
         validationErrors.push(`cloneDir does not exist: ${data.cloneDir}`)
       } else if (Array.isArray(data.relevantFiles)) {
-        for (const filePath of data.relevantFiles as string[]) {
+        for (const filePath of data.relevantFiles) {
           if (!fs.existsSync(filePath)) {
             validationErrors.push(`relevantFile not found: ${filePath}`)
           }
@@ -189,7 +167,7 @@ async function runTask(
     output?.type === 'structuredOutput' &&
     output.value !== null
   ) {
-    const data = output.value as LibrarianOutput
+    const data = output.value
     console.log(`Answer length: ${data.answer?.length ?? 0} chars`)
     console.log(`Relevant files: ${data.relevantFiles?.length ?? 0}`)
     console.log(`Clone dir: ${data.cloneDir}`)
@@ -201,7 +179,7 @@ async function runTask(
     output?.type === 'structuredOutput' &&
     output.value !== null
   ) {
-    const data = output.value as LibrarianOutput
+    const data = output.value
     if (data.cloneDir && fs.existsSync(data.cloneDir)) {
       console.log(`Cleaning up ${data.cloneDir}...`)
       fs.rmSync(data.cloneDir, { recursive: true, force: true })
@@ -236,7 +214,7 @@ async function main() {
     agentsPath: path.join(process.cwd(), 'agents'),
     verbose: true,
   })
-  const agentDefinitions = Object.values(agents) as AgentDefinition[]
+  const agentDefinitions = Object.values(agents)
 
   const librarianAgent = agentDefinitions.find((a) => a.id === 'librarian')
   if (!librarianAgent) {
@@ -250,12 +228,7 @@ async function main() {
     cwd: process.cwd(),
   })
 
-  const results: Array<{
-    name: string
-    success: boolean
-    traceFile: string
-    validationErrors: string[]
-  }> = []
+  const results = []
 
   for (const { task, index } of tasksToRun) {
     const result = await runTask(client, task, agentDefinitions, index)
@@ -286,7 +259,7 @@ async function main() {
   }
 }
 
-if (import.meta.main && process.env.RUN_LIBRARIAN_E2E === '1') {
+if (require.main === module && process.env.RUN_LIBRARIAN_E2E === '1') {
   main().catch((err) => {
     console.error('Fatal error:', err)
     process.exit(1)
