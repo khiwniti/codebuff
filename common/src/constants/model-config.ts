@@ -6,6 +6,7 @@ export const ALLOWED_MODEL_PREFIXES = [
   'openai',
   'google',
   'x-ai',
+  'custom',
 ] as const
 
 export const costModes = [
@@ -142,6 +143,9 @@ export function supportsCacheControl(model: Model): boolean {
   }
   if (model.startsWith('anthropic/')) {
     return true
+  }
+  if (model.startsWith('custom/')) {
+    return false
   }
   if (!isExplicitlyDefinedModel(model)) {
     // Default to no cache control for unknown models

@@ -11,6 +11,11 @@ import path from 'path'
 
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { BYOK_OPENROUTER_HEADER } from '@codebuff/common/constants/byok'
+import {
+  CUSTOM_MODEL_PREFIX,
+  isCustomModel,
+  toCustomModelId,
+} from '@codebuff/common/constants/custom-model'
 import { isFreeMode } from '@codebuff/common/constants/free-agents'
 import {
   CHATGPT_BACKEND_BASE_URL,
@@ -36,7 +41,11 @@ import {
   getValidChatGptOAuthCredentials,
   getValidClaudeOAuthCredentials,
 } from '../credentials'
-import { getByokOpenrouterApiKeyFromEnv } from '../env'
+import {
+  getByokOpenrouterApiKeyFromEnv,
+  getCustomModelApiKeyFromEnv,
+  getCustomModelBaseUrlFromEnv,
+} from '../env'
 import {
   createChatGptBackendFetch,
   extractChatGptAccountId,
@@ -286,12 +295,62 @@ export async function getModelForRequest(params: ModelRequestParams): Promise<Mo
     }
   }
 
+  // Check if we should use custom OpenAI-compatible provider
+  if (isCustomModel(model)) {
+    const customModelId = toCustomModelId(model)
+    const baseURL = getCustomModelBaseUrlFromEnv()
+    const customApiKey = getCustomModelApiKeyFromEnv()
+
+    if (!baseURL) {
+      throw new Error(
+        `Custom model base URL not configured. Please set CODEBUFF_CUSTOM_MODEL_BASE_URL environment variable.`,
+      )
+    }
+
+    return {
+      model: createCustomModel(customModelId, baseURL, customApiKey),
+      isClaudeOAuth: false,
+      isChatGptOAuth: false,
+    }
+  }
+
   // Default: use Codebuff backend
   return {
     model: createCodebuffBackendModel(apiKey, model),
     isClaudeOAuth: false,
     isChatGptOAuth: false,
   }
+}
+
+/**
+ * Create a custom OpenAI-compatible model.
+ */
+function createCustomModel(
+  modelId: string,
+  baseURL: string,
+  apiKey?: string,
+): LanguageModel {
+  return new OpenAICompatibleChatLanguageModel(modelId, {
+    provider: 'custom',
+    url: ({ path: endpoint }) => {
+      const url = new URL(baseURL)
+      // Ensure base URL ends with / if needed, or join properly
+      const baseStr = url.toString().endsWith('/')
+        ? url.toString()
+        : `${url.toString()}/`
+      const endpointTrimmed = endpoint.startsWith('/')
+        ? endpoint.slice(1)
+        : endpoint
+      return `${baseStr}${endpointTrimmed}`
+    },
+    headers: () => ({
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      'user-agent': `ai-sdk/openai-compatible/${VERSION}/codebuff-custom`,
+    }),
+    fetch: undefined,
+    includeUsage: undefined,
+    supportsStructuredOutputs: true,
+  })
 }
 
 /**
