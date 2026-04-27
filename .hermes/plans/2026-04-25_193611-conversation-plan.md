@@ -108,7 +108,7 @@ Capture expected Claude Code / Anthropic Messages API behavior before implementa
 - `tests/test_tool_lifecycle_conformance.py`
 - `tests/fixtures/anthropic/*.json`
 
-### Validation
+### Validation  
 
 ```sh
 cd /Users/khiwn/custom-claude-code/nvd-claude-proxy
@@ -132,7 +132,7 @@ Ensure every request and response crosses a typed Anthropic protocol boundary be
 - `Message`
 - `ContentBlock` discriminated union
 - `TextBlock`
-- `ImageBlock`
+- `ImageBloc
 - `ToolUseBlock`
 - `ToolResultBlock` including `is_error`
 - `ThinkingBlock`

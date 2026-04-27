@@ -126,8 +126,9 @@ _FINISH_TO_STOP: dict[str, str] = {
 }
 
 
+# Moved to module level for better separation of concerns
 @dataclass(slots=True)
-class _ToolBuf:
+class ToolBuf:
     """Accumulator for a single streamed OpenAI tool call."""
 
     _MAX_ARGS_BYTES: int = 10 * 1024 * 1024  # 10 MB hard cap
@@ -174,7 +175,7 @@ class StreamTranslator:
     _open_block_type: BlockType | None = None
     _open_block_index: int | None = None
     _open_thinking_signature_sent: bool = False
-    _tools_by_openai_idx: dict[int, _ToolBuf] = field(default_factory=dict)
+    _tools_by_openai_idx: dict[int, ToolBuf] = field(default_factory=dict)
 
     _stop_reason: str = "end_turn"
     _usage_input: int = 0
@@ -307,99 +308,102 @@ class StreamTranslator:
             },
         )
 
+    def _flush_tool(self, buf: ToolBuf, o_idx: int) -> Iterator[dict]:
+        if not buf.openai_id or not buf.name:
+            return
+
+        emit_name = self.tool_id_map.original_tool_name(buf.name or "")
+
+        if not self._is_declared_tool_name(buf.name):
+            if self._open_block_type != "text":
+                yield from self._close_any_open()
+                yield from self._open_text_block()
+            warning = f"\n[PROXY BLOCKED undeclared tool '{buf.name}' with args: {buf.args}]\n"
+            yield from self._emit(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": self._open_block_index,
+                    "delta": {"type": "text_delta", "text": warning},
+                },
+            )
+            return
+
+        # Strip prose
+        cleaned_args = _strip_leading_prose(buf.args)
+
+        # Validation
+        import json
+
+        try:
+            if cleaned_args:
+                parsed_args = json.loads(cleaned_args)
+            else:
+                parsed_args = {}
+
+            if self.tool_controller:
+                failing = self.tool_controller.validate_all(
+                    [
+                        {
+                            "type": "tool_use",
+                            "id": self.tool_id_map.openai_to_anthropic(buf.openai_id),
+                            "name": buf.name,
+                            "input": parsed_args,
+                        }
+                    ]
+                )
+                if failing:
+                    raise ValueError(f"Schema validation failed for tool '{failing[0]}'")
+        except Exception as e:
+            if self._open_block_type != "text":
+                yield from self._close_any_open()
+                yield from self._open_text_block()
+            warning = f"\n[PROXY BLOCKED tool '{buf.name}' due to invalid args: {str(e)}]\n"
+            yield from self._emit(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": self._open_block_index,
+                    "delta": {"type": "text_delta", "text": warning},
+                },
+            )
+            return
+
+        yield from self._close_any_open()
+        buf.anthropic_id = self.tool_id_map.openai_to_anthropic(buf.openai_id)
+        buf.anth_index = self._next_index
+        self._next_index += 1
+        self._open_block_type = "tool_use"
+        self._open_block_index = buf.anth_index
+
+        yield from self._emit(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": buf.anth_index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": buf.anthropic_id,
+                    "name": emit_name,
+                    "input": {},
+                },
+            },
+        )
+        if cleaned_args:
+            yield from self._emit(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": buf.anth_index,
+                    "delta": {"type": "input_json_delta", "partial_json": cleaned_args},
+                },
+            )
+        yield from self._close_open_tool_use()
+
     def _flush_tools(self) -> Iterator[dict]:
         for o_idx in sorted(self._tools_by_openai_idx.keys()):
             buf = self._tools_by_openai_idx[o_idx]
-            if not buf.openai_id or not buf.name:
-                continue
-
-            emit_name = self.tool_id_map.original_tool_name(buf.name or "")
-
-            if not self._is_declared_tool_name(buf.name):
-                if self._open_block_type != "text":
-                    yield from self._close_any_open()
-                    yield from self._open_text_block()
-                warning = f"\n[PROXY BLOCKED undeclared tool '{buf.name}' with args: {buf.args}]\n"
-                yield from self._emit(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": self._open_block_index,
-                        "delta": {"type": "text_delta", "text": warning},
-                    },
-                )
-                continue
-
-            # Strip prose
-            cleaned_args = _strip_leading_prose(buf.args)
-
-            # Validation
-            import json
-
-            try:
-                if cleaned_args:
-                    parsed_args = json.loads(cleaned_args)
-                else:
-                    parsed_args = {}
-
-                if self.tool_controller:
-                    failing = self.tool_controller.validate_all(
-                        [
-                            {
-                                "type": "tool_use",
-                                "id": self.tool_id_map.openai_to_anthropic(buf.openai_id),
-                                "name": buf.name,
-                                "input": parsed_args,
-                            }
-                        ]
-                    )
-                    if failing:
-                        raise ValueError(f"Schema validation failed for tool '{failing[0]}'")
-            except Exception as e:
-                if self._open_block_type != "text":
-                    yield from self._close_any_open()
-                    yield from self._open_text_block()
-                warning = f"\n[PROXY BLOCKED tool '{buf.name}' due to invalid args: {str(e)}]\n"
-                yield from self._emit(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": self._open_block_index,
-                        "delta": {"type": "text_delta", "text": warning},
-                    },
-                )
-                continue
-
-            yield from self._close_any_open()
-            buf.anthropic_id = self.tool_id_map.openai_to_anthropic(buf.openai_id)
-            buf.anth_index = self._next_index
-            self._next_index += 1
-            self._open_block_type = "tool_use"
-            self._open_block_index = buf.anth_index
-
-            yield from self._emit(
-                "content_block_start",
-                {
-                    "type": "content_block_start",
-                    "index": buf.anth_index,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": buf.anthropic_id,
-                        "name": emit_name,
-                        "input": {},
-                    },
-                },
-            )
-            if cleaned_args:
-                yield from self._emit(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": buf.anth_index,
-                        "delta": {"type": "input_json_delta", "partial_json": cleaned_args},
-                    },
-                )
-            yield from self._close_open_tool_use()
+            yield from self._flush_tool(buf, o_idx)
 
     def _is_declared_tool_name(self, streamed_name: str | None) -> bool:
         """Whether a streamed tool name exists in the request's declared tool list.
@@ -615,7 +619,7 @@ class StreamTranslator:
         # 3) Tool-call chunks.
         for tc in tool_calls:
             o_idx = tc.get("index", 0)
-            buf = self._tools_by_openai_idx.setdefault(o_idx, _ToolBuf())
+            buf = self._tools_by_openai_idx.setdefault(o_idx, ToolBuf())
             fn = tc.get("function") or {}
             if _id := tc.get("id"):
                 buf.openai_id = _id

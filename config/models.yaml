@@ -9,14 +9,16 @@ router:
   default: "claude-qwen3"
   background: "claude-haiku-4-5"
   think: "claude-opus-4-7"
-  long_context: "claude-sonnet-4-6"
+  long_context: "claude-llama4-scout"   # 10 M-token context window
   long_context_threshold: 60000
-  vision: "claude-opus-4-7-vision"
+  vision: "claude-llama4-maverick"
 
 aliases:
-  # Flagship → Llama 3.3 Nemotron Super 49B (Optimized for reasoning/tools)
+  # ── NVIDIA NEMOTRON tier ────────────────────────────────────────────────────
+  # Flagship → Nemotron Ultra 253B (best reasoning / coding / agents on NIM)
+  # Was nvidia/nemotron-3-ultra-500b-a50b — that ID never existed on NIM.
   claude-opus-4-7:
-    nvidia_id: "nvidia/nemotron-3-ultra-500b-a50b"
+    nvidia_id: "nvidia/llama-3.1-nemotron-ultra-253b-v1"
     supports_tools: true
     supports_vision: false
     supports_reasoning: true
@@ -27,9 +29,9 @@ aliases:
       - "claude-sonnet-4-6"
       - "claude-haiku-4-5"
 
-  # Balanced → Nemotron-3 Super (120B MoE)
+  # Balanced → Nemotron Super 49B v1.5 (LoRA + parallel tool calling confirmed)
   claude-sonnet-4-6:
-    nvidia_id: "nvidia/nemotron-3-super-120b-a12b"
+    nvidia_id: "nvidia/llama-3.3-nemotron-super-49b-v1.5"
     supports_tools: true
     supports_vision: false
     supports_reasoning: true
@@ -39,7 +41,7 @@ aliases:
     failover_to:
       - "claude-haiku-4-5"
 
-  # Fast → Nemotron-3 Nano (30B MoE)
+  # Fast → Nemotron 3 Nano 30B MoE (slash-think, good throughput)
   claude-haiku-4-5:
     nvidia_id: "nvidia/nemotron-3-nano-30b-a3b"
     supports_tools: true
@@ -49,16 +51,38 @@ aliases:
     max_context: 131072
     max_output: 16384
 
-  # Vision-capable (Llama 4 Maverick)
+  # ── META LLAMA 4 tier ───────────────────────────────────────────────────────
+  # Maverick 17B×128E — multimodal flagship, 1 M-token context
+  claude-llama4-maverick:
+    nvidia_id: "meta/llama-4-maverick-17b-128e-instruct"
+    supports_tools: true
+    supports_vision: true
+    supports_reasoning: false
+    max_context: 1000000
+    max_output: 16384
+    failover_to:
+      - "claude-llama4-scout"
+
+  # Scout 17B×16E — 10 M-token context, vision, single-H100-deployable
+  claude-llama4-scout:
+    nvidia_id: "meta/llama-4-scout-17b-16e-instruct"
+    supports_tools: true
+    supports_vision: true
+    supports_reasoning: false
+    max_context: 10000000
+    max_output: 16384
+
+  # Backward-compat alias kept for existing callers
   claude-opus-4-7-vision:
     nvidia_id: "meta/llama-4-maverick-17b-128e-instruct"
     supports_tools: true
     supports_vision: true
     supports_reasoning: false
-    max_context: 131072
+    max_context: 1000000
     max_output: 16384
 
-  # Qwen3 with thinking kwargs
+  # ── QWEN tier ───────────────────────────────────────────────────────────────
+  # Qwen3 235B-A22B (thinking via extra_body kwargs)
   claude-qwen3:
     nvidia_id: "qwen/qwen3-235b-a22b"
     supports_tools: true
@@ -68,7 +92,28 @@ aliases:
     max_context: 131072
     max_output: 16384
 
-  # DeepSeek reasoning (tools unreliable)
+  # ── DEEPSEEK tier ───────────────────────────────────────────────────────────
+  # V4 Pro — 1.6 T params, 49 B active, 1 M context, tool calling + reasoning
+  claude-deepseek-v4:
+    nvidia_id: "deepseek-ai/deepseek-v4-pro"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "always-on"
+    temperature_override: 0.6
+    max_context: 1000000
+    max_output: 16384
+
+  # V4 Flash — 284 B total, 13 B active, 1 M context, fast inference
+  claude-deepseek-v4-flash:
+    nvidia_id: "deepseek-ai/deepseek-v4-flash"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: false
+    max_context: 1000000
+    max_output: 16384
+
+  # R1 — pure reasoning, no tool calling
   claude-r1:
     nvidia_id: "deepseek-ai/deepseek-r1"
     supports_tools: false
@@ -79,19 +124,40 @@ aliases:
     max_context: 131072
     max_output: 16384
 
-  # Plain Llama 3.3 (no reasoning)
-  claude-llama-3-3:
-    nvidia_id: "meta/llama-3.3-70b-instruct"
+  # ── MISTRAL tier ────────────────────────────────────────────────────────────
+  # Mistral Small 4 — 119 B, vision + text, tool calling
+  claude-mistral:
+    nvidia_id: "mistralai/mistral-small-4-119b-2603"
     supports_tools: true
-    supports_vision: false
+    supports_vision: true
     supports_reasoning: false
-    reasoning_style: "none"
     max_context: 131072
     max_output: 16384
 
-  # GLM-5.1
-  glm-5-1:
-    nvidia_id: "z-ai/glm-5.1"
+  # ── GOOGLE GEMMA tier ───────────────────────────────────────────────────────
+  # Gemma 4 31B — vision + text + video, reasoning via <|think|> (off by default)
+  claude-gemma4:
+    nvidia_id: "google/gemma-4-31b-it"
+    supports_tools: true
+    supports_vision: true
+    supports_reasoning: false   # thinking token not wired yet; off by default
+    max_context: 131072
+    max_output: 16384
+
+  # ── MINIMAX tier ────────────────────────────────────────────────────────────
+  # MiniMax M2.7 — 230 B, 204 K context, agentic tool use
+  claude-minimax:
+    nvidia_id: "minimaxai/minimax-m2.7"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: false
+    max_context: 204800
+    max_output: 16384
+
+  # ── LEGACY / utility ────────────────────────────────────────────────────────
+  # Plain Llama 3.3 70B (no reasoning, reliable baseline)
+  claude-llama-3-3:
+    nvidia_id: "meta/llama-3.3-70b-instruct"
     supports_tools: true
     supports_vision: false
     supports_reasoning: false
@@ -105,6 +171,6 @@ prefix_fallbacks:
   "claude-sonnet-3":   "claude-sonnet-4-6"
   "claude-3-5-haiku":  "claude-haiku-4-5"
   "claude-haiku-3":    "claude-haiku-4-5"
-  "claude-opus-4-6":     "claude-opus-4-7"
+  "claude-opus-4-6":   "claude-opus-4-7"
   "claude-3-opus":     "claude-opus-4-7"
   "claude-opus-3":     "claude-opus-4-7"

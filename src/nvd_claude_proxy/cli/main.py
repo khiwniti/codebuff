@@ -820,13 +820,46 @@ def dashboard(
 # ── ncp kill ──────────────────────────────────────────────────────────────────
 
 
+def _proxy_cmdline(pid: str) -> str:
+    """Return the command line of *pid* as a single string, or '' on error."""
+    try:
+        import subprocess as _sp
+
+        r = _sp.run(
+            ["ps", "-p", pid, "-o", "args="],
+            capture_output=True,
+            text=True,
+        )
+        return r.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _is_proxy_process(pid: str) -> bool:
+    """Return True only when the process looks like the nvd_claude_proxy server.
+
+    Uses the process argv so we never accidentally target Claude Code, the
+    shell, or any other tool that happens to share the port momentarily.
+    """
+    cmdline = _proxy_cmdline(pid)
+    return "nvd_claude_proxy" in cmdline or (
+        "main.py" in cmdline and "nvd" in cmdline
+    )
+
+
 @app.command()
 def kill(
     port: int = typer.Option(None, "--port", "-p"),
     host: str = typer.Option(None, "--host"),
 ) -> None:
-    """Kill any process listening on the proxy port (cleans up stuck instances)."""
+    """Kill the proxy process listening on the proxy port.
+
+    Only targets processes whose command line contains 'nvd_claude_proxy',
+    so Claude Code and other tools are never affected.
+    Uses SIGTERM first (graceful), then SIGKILL after 3 s if still alive.
+    """
     import signal as _signal
+    import time as _time
 
     settings = _load_settings()
     effective_port = port or settings.proxy_port
@@ -834,44 +867,50 @@ def kill(
     try:
         import subprocess as _sp
 
-        # 1. Find PIDs listening on the TCP port (aggressive)
+        # Port-only lookup — avoids any name-based pattern that could match claude.
         result = _sp.run(
             ["lsof", "-ti", f"tcp:{effective_port}"],
             capture_output=True,
             text=True,
         )
-        pids = {p.strip() for p in result.stdout.splitlines() if p.strip()}
+        port_pids = {p.strip() for p in result.stdout.splitlines() if p.strip()}
 
-        # 2. Find PIDs by process name (comprehensive)
-        # Search for both 'ncp' and 'nvd_claude_proxy'
-        try:
-            pgrep_res = _sp.run(
-                ["pgrep", "-f", "nvd_claude_proxy|ncp"],
-                capture_output=True,
-                text=True,
-            )
-            pids.update(p.strip() for p in pgrep_res.stdout.splitlines() if p.strip())
-        except FileNotFoundError:
-            pass
+        # Filter: keep only confirmed proxy processes; never kill ourselves.
+        my_pid = str(os.getpid())
+        pids = {
+            pid
+            for pid in port_pids
+            if pid != my_pid and _is_proxy_process(pid)
+        }
 
         if not pids:
             console.print(
-                f"[dim]Nothing listening on port {effective_port} or related to ncp found.[/dim]"
+                f"[dim]No nvd_claude_proxy process found on port {effective_port}.[/dim]"
             )
             return
 
-        # Don't kill ourselves
-        my_pid = str(os.getpid())
-        pids.discard(my_pid)
-
         for pid in sorted(pids, key=int, reverse=True):
+            iid = int(pid)
             try:
-                os.kill(int(pid), _signal.SIGKILL)
-                console.print(f"[green]✓[/green] Killed PID {pid}")
+                # Graceful shutdown first.
+                os.kill(iid, _signal.SIGTERM)
+                console.print(f"[dim]SIGTERM → PID {pid} …[/dim]")
+                deadline = _time.monotonic() + 3.0
+                while _time.monotonic() < deadline:
+                    _time.sleep(0.1)
+                    try:
+                        os.kill(iid, 0)  # probe — raises if already gone
+                    except ProcessLookupError:
+                        break
+                else:
+                    # Still alive after 3 s — force kill.
+                    os.kill(iid, _signal.SIGKILL)
+                    console.print(f"[yellow]SIGKILL → PID {pid}[/yellow]")
+                console.print(f"[green]✓[/green] Stopped proxy PID {pid}")
             except ProcessLookupError:
-                pass
+                pass  # already gone
             except Exception as e:
-                err_console.print(f"[dim]Failed to kill {pid}: {e}[/dim]")
+                err_console.print(f"[dim]Failed to stop {pid}: {e}[/dim]")
     except FileNotFoundError:
         err_console.print("[yellow]lsof not found — cannot auto-kill. Run:[/yellow]")
         err_console.print(f"  kill $(lsof -ti tcp:{effective_port})")
