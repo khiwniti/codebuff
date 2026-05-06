@@ -2,11 +2,11 @@
 # and capability flags. Lookup is exact-first, then prefix-match.
 # Fallbacks honor ANTHROPIC_MODEL / ANTHROPIC_SMALL_FAST_MODEL.
 defaults:
-  big: "claude-qwen3"
+  big: "claude-opus-4-7"
   small: "claude-haiku-4-5"
 
 router:
-  default: "claude-qwen3"
+  default: "claude-opus-4-7"
   background: "claude-haiku-4-5"
   think: "claude-opus-4-7"
   long_context: "claude-llama4-scout"   # 10 M-token context window
@@ -15,18 +15,20 @@ router:
 
 aliases:
   # ── NVIDIA NEMOTRON tier ────────────────────────────────────────────────────
-  # Flagship → Nemotron Ultra 253B (best reasoning / coding / agents on NIM)
-  # Was nvidia/nemotron-3-ultra-500b-a50b — that ID never existed on NIM.
+  # Default agentic/coding model on NVIDIA NIM → Qwen3 Coder 480B-A35B.
+  # Qwen3.5 122B-A10B may be listed but can return DEGRADED function 400s.
+  # Nemotron Ultra 253B is listed by /models but returns 404 for this account.
   claude-opus-4-7:
-    nvidia_id: "nvidia/llama-3.1-nemotron-ultra-253b-v1"
+    nvidia_id: "qwen/qwen3-coder-480b-a35b-instruct"
     supports_tools: true
     supports_vision: false
     supports_reasoning: true
-    reasoning_style: "detailed-thinking-v1"
+    reasoning_style: "qwen-kwargs"
     max_context: 131072
     max_output: 16384
     failover_to:
       - "claude-sonnet-4-6"
+      - "claude-qwen3-coder"
       - "claude-haiku-4-5"
 
   # Balanced → Nemotron Super 49B v1.5 (LoRA + parallel tool calling confirmed)
@@ -85,6 +87,18 @@ aliases:
   # Qwen3 235B-A22B (thinking via extra_body kwargs)
   claude-qwen3:
     nvidia_id: "qwen/qwen3-235b-a22b"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "qwen-kwargs"
+    max_context: 131072
+    max_output: 16384
+
+  # Agentic coding fallback → Qwen3 Coder 480B-A35B.
+  # Larger and strong for coding, but kept as fallback because it can be slower
+  # or high-traffic compared with the previous-flagship Qwen3.5 122B default.
+  claude-qwen3-coder:
+    nvidia_id: "qwen/qwen3-coder-480b-a35b-instruct"
     supports_tools: true
     supports_vision: false
     supports_reasoning: true

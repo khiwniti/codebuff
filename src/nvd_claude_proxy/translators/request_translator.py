@@ -263,12 +263,24 @@ def _anthropic_message_to_openai(
             m["tool_calls"] = tool_calls
         out.append(m)
     else:  # "user" — tool_result blocks live here
+        # PROTOCOL ADJACENCY: OpenAI requires role:"tool" messages to immediately
+        # follow the assistant role:"assistant" message that contained the
+        # tool_calls. We therefore place all tool_result messages FIRST, followed
+        # by any residual user text.
+        #
+        # PARALLEL ORDERING: We sort the tool results to match the order in which
+        # the assistant originally called the tools.
+        tool_result_messages.sort(
+            key=lambda m: tool_id_map.get_call_index(
+                tool_id_map.openai_to_anthropic(m["tool_call_id"])
+            )
+        )
+        out.extend(tool_result_messages)
         if text_parts:
             if any(p["type"] != "text" for p in text_parts):
                 out.append({"role": "user", "content": text_parts})
             else:
                 out.append({"role": "user", "content": "".join(p["text"] for p in text_parts)})
-        out.extend(tool_result_messages)
     return out
 
 
@@ -339,7 +351,6 @@ def translate_request(
     # When a lot of tools are present, tighten per-description limits to keep
     # the prompt under the model's context window.
     mapped_tools: list[dict] = []
-    _ALLOWED_META_TOOLS = {"bash", "computer", "browser", "memory"}
     if (tools := anthropic_body.get("tools")) and spec.tools.supports:
         tool_count = len(tools)
         if tool_count > 100:
@@ -349,15 +360,8 @@ def translate_request(
         else:
             desc_cap = 480
 
-        filtered_tools = []
-        for t in tools:
-            # Drop hallucinated meta-tools if they sneak into the input
-            if t.get("name") in _ALLOWED_META_TOOLS:
-                continue
-            filtered_tools.append(t)
-
         mapped_tools = anthropic_tools_to_openai(
-            filtered_tools, tool_id_map=tool_id_map, description_cap=desc_cap
+            tools, tool_id_map=tool_id_map, description_cap=desc_cap
         )
 
     # NVIDIA rejects the request if `max_tokens + input_tokens > max_context`.

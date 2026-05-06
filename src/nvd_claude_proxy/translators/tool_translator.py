@@ -54,9 +54,72 @@ def _is_server_tool(tool: dict) -> bool:
         return False
     if t in _SERVER_TOOL_TYPES:
         return True
-    # Any other dated type we haven't enumerated — conservatively treat as
-    # server-tool (Anthropic has never used dated suffixes for user tools).
     return bool(_DATED_TOOL_RE.match(t))
+
+
+def _inject_server_tool_schema(tool: dict) -> dict:
+    """Injects the implicit schema for Anthropic's server tools so NIM models can use them."""
+    t_type = str(tool.get("type", ""))
+    t_name = tool.get("name", "")
+
+    # Base copy
+    out = dict(tool)
+    out["type"] = "function"
+
+    if "bash" in t_type or t_name == "bash":
+        out["name"] = t_name or "bash"
+        out["description"] = "Run bash commands in a stateful shell."
+        out["input_schema"] = {
+            "type": "object",
+            "properties": {"command": {"type": "string"}, "restart": {"type": "boolean"}},
+        }
+    elif "computer" in t_type or t_name == "computer":
+        out["name"] = t_name or "computer"
+        out["description"] = "Control the computer keyboard and mouse."
+        out["input_schema"] = {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "key",
+                        "type",
+                        "mouse_move",
+                        "left_click",
+                        "left_click_drag",
+                        "right_click",
+                        "middle_click",
+                        "double_click",
+                        "screenshot",
+                        "cursor_position",
+                    ],
+                },
+                "coordinate": {"type": "array", "items": {"type": "integer"}},
+                "text": {"type": "string"},
+            },
+            "required": ["action"],
+        }
+    elif "text_editor" in t_type or t_name == "str_replace_editor":
+        out["name"] = t_name or "str_replace_editor"
+        out["description"] = "View and edit files using string replacement."
+        out["input_schema"] = {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "enum": ["view", "create", "str_replace", "insert", "undo_edit"],
+                },
+                "path": {"type": "string"},
+                "file_text": {"type": "string"},
+                "insert_line": {"type": "integer"},
+                "new_str": {"type": "string"},
+                "old_str": {"type": "string"},
+                "view_range": {"type": "array", "items": {"type": "integer"}},
+            },
+            "required": ["command", "path"],
+        }
+
+    return out
 
 
 def anthropic_tools_to_openai(
@@ -68,24 +131,21 @@ def anthropic_tools_to_openai(
 ) -> list[dict]:
     """Anthropic tool defs → OpenAI function-tool defs.
 
-    - Drops Anthropic server tools (web_search, bash, computer, …).
+    - Injects schemas for Anthropic server tools (web_search, bash, computer, …) so they work on NIM.
     - Sanitizes names and JSON schemas for NIM compatibility.
     - Optionally caps total tool count and per-tool description length.
     """
     out: list[dict] = []
-    dropped_server: list[str] = []
     renamed: list[tuple[str, str]] = []
     skipped_nameless = 0
-    # Collision guard: tracks sanitized_name → first original_name that claimed it.
-    # When a collision is detected the later tool is dropped to avoid silently
-    # replacing the first tool's schema with a different one.
     seen_sanitized: dict[str, str] = {}
-    collisions: list[tuple[str, str]] = []  # (duplicate_original, winner_original)
+    collisions: list[tuple[str, str]] = []
 
     for t in tools or []:
         if _is_server_tool(t):
-            dropped_server.append(t.get("name") or t.get("type") or "?")
+            _log.debug("tools.server_tool_dropped", type=t.get("type"), name=t.get("name"))
             continue
+
         ttype = t.get("type")
         if ttype is not None and ttype not in _PASSTHROUGH_TOOL_TYPES:
             _log.debug("tools.unknown_type", type=ttype, name=t.get("name"))
@@ -93,6 +153,7 @@ def anthropic_tools_to_openai(
         if not raw_name:
             skipped_nameless += 1
             continue
+
         name = sanitize_tool_name(raw_name)
         if name != raw_name:
             renamed.append((raw_name, name))
@@ -130,8 +191,6 @@ def anthropic_tools_to_openai(
             dropped=len(out) - max_tools,
         )
         out = out[:max_tools]
-    if dropped_server:
-        _log.info("tools.server_tools_dropped", names=dropped_server)
     if renamed:
         _log.debug("tools.names_sanitized", renames=renamed[:10], total=len(renamed))
     if skipped_nameless:
@@ -177,10 +236,25 @@ class ToolIdMap:
         # Map sanitized-name → original-name so tool_use blocks can emit the
         # name Claude Code originally sent (preserves tool_result matching).
         self._sanitized_to_original: dict[str, str] = {}
+        # Track the global order of tool_use IDs encountered in assistant messages.
+        self._call_order: list[str] = []
+
+    def record_call_order(self, toolu_id: str) -> None:
+        """Record that a tool was called, to preserve ordering in results."""
+        if toolu_id not in self._call_order:
+            self._call_order.append(toolu_id)
+
+    def get_call_index(self, toolu_id: str) -> int:
+        """Return the order index of a tool_use ID, or a large number if unknown."""
+        try:
+            return self._call_order.index(toolu_id)
+        except ValueError:
+            return 999999
 
     def register_anthropic(self, toolu_id: str) -> str:
         self._a_to_o[toolu_id] = toolu_id
         self._o_to_a[toolu_id] = toolu_id
+        self.record_call_order(toolu_id)
         return toolu_id
 
     def openai_to_anthropic(self, openai_id: str) -> str:

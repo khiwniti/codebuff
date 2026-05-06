@@ -6,14 +6,22 @@ from typing import AsyncIterator, Callable, Any
 
 import httpx
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import ORJSONResponse, StreamingResponse
 
 from ..clients.nvidia_client import NvidiaClient
 from ..errors.mapper import openai_error_to_anthropic
 from ..translators.request_translator import ContextOverflowError, translate_request
 from ..translators.response_translator import translate_response
-from ..translators.stream_translator import StreamTranslator
+from ..core.events import StreamState
+from ..core.pipeline import Pipeline
+from ..core.processors import (
+    MetadataProcessor,
+    TextProcessor,
+    ToolProcessor,
+    SafetyProcessor,
+    FinalizerProcessor,
+)
 from ..translators.tool_controller import ToolInvocationController
 from ..translators.tool_translator import ToolIdMap
 from ..translators.transformers import (
@@ -77,40 +85,6 @@ def _build_transformer_chain(
     return TransformerChain(transformers, on_fix=on_fix)
 
 
-def _check_proxy_key(request: Request) -> None:
-    s = request.app.state.settings
-    if not s.proxy_api_key:
-        return
-
-    # Trusted sessions must be authenticated. Freshly created sessions are
-    # not authenticated until the key is checked once.
-    session_obj = getattr(request.state, "session", None)
-    if session_obj and getattr(session_obj, "authenticated", False):
-        return
-
-    presented = request.headers.get("x-api-key")
-    if not presented:
-        auth = request.headers.get("authorization", "")
-        if auth.lower().startswith("bearer "):
-            presented = auth[7:].strip()
-
-    if presented != s.proxy_api_key:
-        raise HTTPException(
-            401,
-            detail={
-                "type": "error",
-                "error": {
-                    "type": "authentication_error",
-                    "message": "invalid proxy api key",
-                },
-            },
-        )
-
-    # Mark session as authenticated for this process lifetime
-    if session_obj:
-        session_obj.authenticated = True
-
-
 def _parse_beta_header(request: Request) -> list[str]:
     raw = request.headers.get("anthropic-beta", "")
     return [b.strip() for b in raw.split(",") if b.strip()]
@@ -154,7 +128,18 @@ def _build_tool_schemas(body: dict) -> dict[str, dict]:
 
 @router.post("/v1/messages")
 async def messages(request: Request):
-    _check_proxy_key(request)
+    idempotency_key = request.headers.get("anthropic-idempotency-key")
+    if idempotency_key:
+        storage = getattr(request.app.state, "storage", None)
+        if storage and hasattr(storage, "get_idempotency"):
+            cached_resp = await storage.get_idempotency(idempotency_key)
+            if cached_resp:
+                _log.info("messages.idempotent_replay", key=idempotency_key)
+                return ORJSONResponse(
+                    cached_resp,
+                    headers=standard_response_headers(new_request_id()),
+                )
+
     body = await request.json()
     request_id = new_request_id()
 
@@ -269,9 +254,9 @@ async def messages(request: Request):
 
     # Load isolated state from session if available
     session_obj = getattr(request.state, "session", None)
-    tool_id_map = SessionService.get_isolated_tool_id_map(session_obj)
-    transformer_chain = SessionService.get_isolated_transformer_chain(
-        session_obj, spec, _build_transformer_chain, on_fix=on_fix
+    tool_id_map = await SessionService.get_isolated_tool_id_map(request, session_obj)
+    transformer_chain = await SessionService.get_isolated_transformer_chain(
+        request, session_obj, spec, _build_transformer_chain, on_fix=on_fix
     )
 
     # Pass tool schemas so the controller can perform deterministic arg validation.
@@ -352,7 +337,7 @@ async def messages(request: Request):
                     "messages.circuit_breaker_open",
                     request_id=rid,
                     upstream="nvidia_api",
-                    retry_after=circuit_breaker.config.timeout
+                    retry_after=circuit_breaker.config.recovery_timeout
                     if hasattr(circuit_breaker, "config")
                     else 30,
                 )
@@ -427,11 +412,17 @@ async def messages(request: Request):
         # Persist session state (tool maps, transformer settings)
         if session_obj:
             await SessionService.save_session_state(
+                request=request,
                 session_id=session_obj.id,
                 tool_id_map=tool_id_map,
                 transformer_chain=transformer_chain,
                 tokens_inc=in_tok + out_tok,
             )
+
+        if idempotency_key:
+            storage = getattr(request.app.state, "storage", None)
+            if storage and hasattr(storage, "save_idempotency"):
+                await storage.save_idempotency(idempotency_key, out)
 
         _log.info(
             "messages.complete",
@@ -474,13 +465,26 @@ async def messages(request: Request):
                         fallback_model=try_spec.alias,
                     )
 
-                st = StreamTranslator(
+                state = StreamState(
+                    message_id=new_request_id().replace("req_", "msg_"),
                     model_name=requested_model,
-                    tool_id_map=active_tool_id_map,
-                    tool_controller=active_tool_controller,
                     budget_tokens=budget_tokens,
                     estimated_input_tokens=est_input_tokens,
-                    transformer_chain=transformer_chain,
+                )
+                if has_cache_control_markers(body):
+                    acct = estimate_cache_tokens(body)
+                    state.cache_creation_input_tokens = acct.cache_creation_input_tokens
+                    state.cache_read_input_tokens = acct.cache_read_input_tokens
+
+                pipeline = Pipeline(
+                    processors=[
+                        MetadataProcessor(),
+                        TextProcessor(),
+                        ToolProcessor(active_tool_id_map, active_tool_controller),
+                        SafetyProcessor(),
+                        FinalizerProcessor(),
+                    ],
+                    state=state,
                 )
                 upstream_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
                 SENTINEL = object()
@@ -502,8 +506,7 @@ async def messages(request: Request):
                             upstream_queue.get(), timeout=_PING_INTERVAL_SECONDS
                         )
                     except asyncio.TimeoutError:
-                        for ev in st._emit("ping", {"type": "ping"}):
-                            yield encode_sse(ev["event"], ev["data"])
+                        yield encode_sse("ping", {"type": "ping"})
                         first_item = await upstream_queue.get()
 
                     # Failover status (5xx or 429) before first chunk.
@@ -553,16 +556,16 @@ async def messages(request: Request):
                                         "request_id": request_id,
                                     }
                                 )
-                            for ev in st.feed(first_item):
+                            for ev in pipeline.feed(first_item):
                                 if hasattr(request.app.state, "pubsub"):
                                     await request.app.state.pubsub.broadcast(
                                         {
                                             "type": "anthropic_event",
-                                            "payload": ev,
+                                            "payload": {"event": ev.event, "data": ev.data},
                                             "request_id": request_id,
                                         }
                                     )
-                                yield encode_sse(ev["event"], ev["data"])
+                                yield encode_sse(ev.event, ev.data)
 
                     while not sentinel_seen:
                         try:
@@ -570,8 +573,7 @@ async def messages(request: Request):
                                 upstream_queue.get(), timeout=_PING_INTERVAL_SECONDS
                             )
                         except asyncio.TimeoutError:
-                            for ev in st._emit("ping", {"type": "ping"}):
-                                yield encode_sse(ev["event"], ev["data"])
+                            yield encode_sse("ping", {"type": "ping"})
                             continue
                         if item is SENTINEL:
                             sentinel_seen = True
@@ -610,42 +612,46 @@ async def messages(request: Request):
                                             "request_id": request_id,
                                         }
                                     )
-                                for ev in st.feed(item):
+                                for ev in pipeline.feed(item):
                                     if hasattr(request.app.state, "pubsub"):
                                         await request.app.state.pubsub.broadcast(
                                             {
                                                 "type": "anthropic_event",
-                                                "payload": ev,
+                                                "payload": {"event": ev.event, "data": ev.data},
                                                 "request_id": request_id,
                                             }
                                         )
-                                    yield encode_sse(ev["event"], ev["data"])
+                                    yield encode_sse(ev.event, ev.data)
 
                     # Finalize with double-close protection (port from claude-code-router)
                     try:
-                        for ev in st.finalize():
-                            yield encode_sse(ev["event"], ev["data"])
+                        for ev in pipeline.finalize():
+                            yield encode_sse(ev.event, ev.data)
                     except Exception:
                         _log.debug("stream.finalize_error", exc_info=True)
 
                     # Persist session state (tool maps, transformer settings)
                     if session_obj:
                         await SessionService.save_session_state(
+                            request=request,
                             session_id=session_obj.id,
                             tool_id_map=active_tool_id_map,
                             transformer_chain=transformer_chain,
-                            tokens_inc=st._usage_input + st._usage_output,
+                            tokens_inc=state.usage_input + state.usage_output,
                         )
 
                     inc_requests(requested_model, True, 200)
-                    inc_tokens(requested_model, st._usage_input, st._usage_output)
+                    inc_tokens(requested_model, state.usage_input, state.usage_output)
                     _log.info(
                         "stream.complete",
                         request_id=request_id,
-                        input_tokens=st._usage_input,
-                        output_tokens=st._usage_output,
+                        input_tokens=state.usage_input,
+                        output_tokens=state.usage_output,
                         cost_usd_est=round(
-                            estimate_cost_usd(requested_model, st._usage_input, st._usage_output), 6
+                            estimate_cost_usd(
+                                requested_model, state.usage_input, state.usage_output
+                            ),
+                            6,
                         ),
                     )
                     return  # success — stop iterating the failover chain

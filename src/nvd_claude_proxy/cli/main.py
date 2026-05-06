@@ -44,6 +44,8 @@ app.add_typer(models_app, name="models")
 console = Console()
 err_console = Console(stderr=True)
 
+_DEFAULT_CLAUDE_CODE_MAX_OUTPUT_TOKENS = 65536
+
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -192,6 +194,49 @@ def _startup_banner(host: str, port: int, registry) -> None:
     console.print()
 
 
+def _resolve_claude_code_max_output_tokens(primary_model_max_output: int) -> str:
+    """Choose Claude Code's client-side output ceiling.
+
+    The proxy can still clamp upstream `max_tokens` per provider capability, but
+    Claude Code has its own response-size guard controlled by
+    `CLAUDE_CODE_MAX_OUTPUT_TOKENS`. Setting that guard to a provider's 16k
+    `max_output` caused long agent/browser turns to fail client-side with:
+
+        Claude's response exceeded the 16384 output token maximum
+
+    Keep Claude Code's guard comfortably above common long-turn output, while
+    honoring an explicit NCP override and any larger parent-shell value.
+    """
+    override = os.environ.get("NCP_CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+    if override:
+        try:
+            return str(max(primary_model_max_output, int(override)))
+        except ValueError:
+            err_console.print(
+                "[yellow]⚠[/yellow] Ignoring invalid NCP_CLAUDE_CODE_MAX_OUTPUT_TOKENS "
+                f"value: {override!r}"
+            )
+
+    inherited = os.environ.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS")
+    inherited_int = 0
+    if inherited:
+        try:
+            inherited_int = int(inherited)
+        except ValueError:
+            err_console.print(
+                "[yellow]⚠[/yellow] Ignoring invalid CLAUDE_CODE_MAX_OUTPUT_TOKENS "
+                f"value: {inherited!r}"
+            )
+
+    return str(
+        max(
+            primary_model_max_output,
+            inherited_int,
+            _DEFAULT_CLAUDE_CODE_MAX_OUTPUT_TOKENS,
+        )
+    )
+
+
 # ── ncp  (default: start proxy + claude) ──────────────────────────────────────
 
 
@@ -224,6 +269,14 @@ def code(
     update_claude: bool = typer.Option(
         False, "--update-claude", help="Run npm update on claude-code before launching."
     ),
+    bare: bool = typer.Option(
+        False,
+        "--bare/--full-claude",
+        help=(
+            "Launch Claude Code in --bare API-key mode. Use --full-claude to load "
+            "normal Claude Code plugins/hooks/MCP discovery (default: --full-claude)."
+        ),
+    ),
 ) -> None:
     """Start the proxy then launch [bold]claude[/bold] automatically.
 
@@ -246,6 +299,7 @@ def code(
         launch_claude=not no_claude,
         claude_extra_args=claude_args.split() if claude_args.strip() else [],
         update_claude=update_claude,
+        bare=bare,
     )
 
 
@@ -258,6 +312,7 @@ def _run_proxy_and_claude(
     launch_claude: bool,
     claude_extra_args: list[str],
     update_claude: bool = False,
+    bare: bool = False,
 ) -> None:
     registry = _load_registry(settings)
 
@@ -363,15 +418,33 @@ def _run_proxy_and_claude(
 
     claude_env = os.environ.copy()
     claude_env["ANTHROPIC_BASE_URL"] = _base_url(host, port)
-    claude_env["ANTHROPIC_API_KEY"] = claude_env.get("ANTHROPIC_API_KEY") or "ncp-local"
+    # Force API-key mode for Claude Code. The proxy validates PROXY_API_KEY if
+    # configured, otherwise it ignores the key value. Do not inherit a stale
+    # Anthropic/OAuth key from the parent shell: interactive Claude Code may
+    # otherwise prefer keychain/OAuth state and show "Not logged in" even though
+    # the local proxy is configured correctly.
+    claude_env["ANTHROPIC_API_KEY"] = settings.proxy_api_key or "not-used"
     claude_env["ANTHROPIC_MODEL"] = model
     claude_env["ANTHROPIC_SMALL_FAST_MODEL"] = registry.default_small
-    # Set output token limit to the model's max_output so Claude Code never
-    # hits "response exceeded maximum" errors on long tool outputs.
+    # Claude Code v2 uses these default-model names in the model picker and in
+    # interactive mode with custom ANTHROPIC_BASE_URL gateways.
+    claude_env["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"] = model
+    claude_env["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"] = "claude-sonnet-4-6"
+    claude_env["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"] = registry.default_small
+    # Set Claude Code's client-side output ceiling above the provider's usual
+    # 16k cap so long agent/browser turns don't fail inside Claude Code before
+    # the proxy/model can finish cleanly.
     primary_spec = registry.resolve(model)
-    claude_env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(primary_spec.max_output)
+    claude_env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = _resolve_claude_code_max_output_tokens(
+        primary_spec.max_output
+    )
 
-    claude_cmd = [claude_bin, *claude_extra_args]
+    claude_cmd = [claude_bin]
+    if bare and "--bare" not in claude_extra_args:
+        claude_cmd.append("--bare")
+    if "--model" not in claude_extra_args and "-m" not in claude_extra_args:
+        claude_cmd.extend(["--model", model])
+    claude_cmd.extend(claude_extra_args)
     console.print(f"[dim]Launching:[/dim] [cyan]{' '.join(claude_cmd)}[/cyan]\n")
 
     result = None
@@ -842,9 +915,7 @@ def _is_proxy_process(pid: str) -> bool:
     shell, or any other tool that happens to share the port momentarily.
     """
     cmdline = _proxy_cmdline(pid)
-    return "nvd_claude_proxy" in cmdline or (
-        "main.py" in cmdline and "nvd" in cmdline
-    )
+    return "nvd_claude_proxy" in cmdline or ("main.py" in cmdline and "nvd" in cmdline)
 
 
 @app.command()
@@ -877,16 +948,10 @@ def kill(
 
         # Filter: keep only confirmed proxy processes; never kill ourselves.
         my_pid = str(os.getpid())
-        pids = {
-            pid
-            for pid in port_pids
-            if pid != my_pid and _is_proxy_process(pid)
-        }
+        pids = {pid for pid in port_pids if pid != my_pid and _is_proxy_process(pid)}
 
         if not pids:
-            console.print(
-                f"[dim]No nvd_claude_proxy process found on port {effective_port}.[/dim]"
-            )
+            console.print(f"[dim]No nvd_claude_proxy process found on port {effective_port}.[/dim]")
             return
 
         for pid in sorted(pids, key=int, reverse=True):

@@ -18,4 +18,4 @@ ENV PYTHONPATH=/app/src \
     PROXY_PORT=8788
 
 EXPOSE 8788
-CMD ["python", "-m", "nvd_claude_proxy.main"]
+CMD ["sh", "-c", "PROXY_PORT=${PORT:-${PROXY_PORT:-8788}} python -m nvd_claude_proxy.main"]

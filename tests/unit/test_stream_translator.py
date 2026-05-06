@@ -300,6 +300,92 @@ def test_undeclared_tool_is_blocked():
     )
 
 
+def test_mcp_tool_is_allowed_even_when_not_in_declared_schemas():
+    chunks = [
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_tavily",
+                                "type": "function",
+                                "function": {
+                                    "name": "mcp__plugin_tavily_tavily__search",
+                                    "arguments": '{"q":"nvd claude proxy"}',
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 2}},
+    ]
+    events = _collect(chunks, tool_schemas={"Read": {"type": "object", "properties": {}}})
+    starts = [
+        e
+        for e in events
+        if e["event"] == "content_block_start" and e["data"]["content_block"]["type"] == "tool_use"
+    ]
+    assert len(starts) == 1
+    assert starts[0]["data"]["content_block"]["name"] == "mcp__plugin_tavily_tavily__search"
+    assert not any(
+        e["event"] == "content_block_delta"
+        and e["data"]["delta"]["type"] == "text_delta"
+        and "PROXY BLOCKED undeclared tool" in e["data"]["delta"]["text"]
+        for e in events
+    )
+
+
+def test_sanitized_mcp_plugin_tool_is_allowed_even_when_not_in_declared_schemas():
+    chunks = [
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_tavily",
+                                "type": "function",
+                                "function": {
+                                    "name": "mcp_plugin_tavily_tavily_web_search",
+                                    "arguments": (
+                                        '{"query":"Thailand corrosion dataset satellite imagery"}'
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 2}},
+    ]
+    events = _collect(chunks, tool_schemas={"Read": {"type": "object", "properties": {}}})
+    starts = [
+        e
+        for e in events
+        if e["event"] == "content_block_start" and e["data"]["content_block"]["type"] == "tool_use"
+    ]
+    assert len(starts) == 1
+    assert starts[0]["data"]["content_block"]["name"] == "mcp_plugin_tavily_tavily_web_search"
+    assert not any(
+        e["event"] == "content_block_delta"
+        and e["data"]["delta"]["type"] == "text_delta"
+        and "PROXY BLOCKED undeclared tool" in e["data"]["delta"]["text"]
+        for e in events
+    )
+
+
 def test_interleaved_parallel_tool_calls():
     chunks = [
         # Tool A starts

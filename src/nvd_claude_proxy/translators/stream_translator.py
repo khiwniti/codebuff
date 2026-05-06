@@ -46,6 +46,7 @@ from ..util.ids import new_message_id, new_thinking_signature
 from .tool_controller import ToolInvocationController
 from .tool_translator import ToolIdMap
 from .transformers import TransformerChain
+from .vision_translator import openai_image_url_to_anthropic
 
 _FENCE_RE = re.compile(r"^```[a-z]*\s*", re.MULTILINE)
 # Matches first JSON object/array start character.
@@ -104,8 +105,10 @@ def _is_claude_code_internal_tool(name: str) -> bool:
     name_lower = name.lower()
     if name_lower in _CLAUDE_CODE_INTERNAL_TOOLS:
         return True
-    # Match by prefix for MCP-style tools
-    if name_lower.startswith("mcp__"):
+    # Match by prefix for MCP-style tools. Claude Code may emit canonical
+    # MCP names (mcp__server__tool) or plugin-adapter sanitized names
+    # (mcp_plugin_<server>_<tool>).
+    if name_lower.startswith(("mcp__", "mcp_plugin_")):
         return True
     # Match by prefix for Skill invocations
     if name_lower.startswith("skill:"):
@@ -192,6 +195,10 @@ class StreamTranslator:
     _hallucination_count: int = 0
     _MAX_REPETITIONS: int = 3  # Force stop after seeing same tool pattern N times
     _MAX_HALLUCINATIONS: int = 3  # Force stop after seeing N malformed tags
+
+    # The OpenAI tool index currently being streamed progressively.
+    # To ensure contiguous Anthropic blocks, we only stream one tool at a time.
+    _streaming_tool_openai_idx: int | None = None
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -312,6 +319,12 @@ class StreamTranslator:
         if not buf.openai_id or not buf.name:
             return
 
+        if buf.started:
+            # Already streamed. Just ensure it's closed.
+            if self._open_block_type == "tool_use" and self._open_block_index == buf.anth_index:
+                yield from self._close_open_tool_use()
+            return
+
         emit_name = self.tool_id_map.original_tool_name(buf.name or "")
 
         if not self._is_declared_tool_name(buf.name):
@@ -413,6 +426,10 @@ class StreamTranslator:
         """
         if not streamed_name:
             return False
+        if _is_claude_code_internal_tool(streamed_name):
+            return True
+        if streamed_name.lower().startswith("mcp_"):
+            return True
         if not self.tool_controller or not self.tool_controller.has_registered_schemas():
             return True
 
@@ -444,7 +461,25 @@ class StreamTranslator:
 
         reasoning = delta.get("reasoning_content")
         text = delta.get("content")
+        image_url = delta.get("image_url")
         tool_calls = delta.get("tool_calls") or []
+
+        # 1.1) Image chunk (multimodal response).
+        if image_url:
+            yield from self._close_any_open()
+            idx = self._next_index
+            self._next_index += 1
+            yield from self._emit(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": idx,
+                    "content_block": openai_image_url_to_anthropic(image_url),
+                },
+            )
+            yield from self._emit(
+                "content_block_stop", {"type": "content_block_stop", "index": idx}
+            )
 
         # 1) Reasoning chunk.
         if reasoning and not self._thinking_budget_hit:
@@ -629,6 +664,7 @@ class StreamTranslator:
                     self.tool_controller.resolve_tool_name(nm) if self.tool_controller else nm
                 )
                 buf.name = resolved or nm
+
             new_args = fn.get("arguments") or ""
 
             # REPETITION DETECTION: Check when tool name FIRST arrives.
@@ -663,6 +699,71 @@ class StreamTranslator:
                             self._stop_reason = "end_turn"
                             self._finished = True
                             return
+
+            # PROGRESSIVE STREAMING logic:
+            # If this is the FIRST tool that appeared, or it's the one we are already
+            # streaming, emit it now.
+            if self._streaming_tool_openai_idx is None:
+                self._streaming_tool_openai_idx = o_idx
+
+            if self._streaming_tool_openai_idx == o_idx:
+                # We can stream this tool.
+                if not buf.started and buf.openai_id and buf.name:
+                    # Validate name BEFORE starting.
+                    if not self._is_declared_tool_name(buf.name):
+                        # Treat as text (blocked).
+                        # We MUST NOT set buf.started=True here because we're not
+                        # starting a tool_use block. We'll let it buffer and
+                        # flush as text later, OR we can emit text now.
+                        # For now, we'll stop streaming THIS tool and let it
+                        # be handled by the finish_reason flusher (which blocks it).
+                        self._streaming_tool_openai_idx = None
+                    else:
+                        yield from self._close_any_open()
+                        buf.anth_index = self._next_index
+                        self._next_index += 1
+                        buf.anthropic_id = self.tool_id_map.openai_to_anthropic(buf.openai_id)
+                        self._open_block_type = "tool_use"
+                        self._open_block_index = buf.anth_index
+                        buf.started = True
+
+                        emit_name = self.tool_id_map.original_tool_name(buf.name)
+                        yield from self._emit(
+                            "content_block_start",
+                            {
+                                "type": "content_block_start",
+                                "index": buf.anth_index,
+                                "content_block": {
+                                    "type": "tool_use",
+                                    "id": buf.anthropic_id,
+                                    "name": emit_name,
+                                    "input": {},
+                                },
+                            },
+                        )
+                        # Emit any buffered args (e.g. from previous chunks)
+                        if buf.args:
+                            yield from self._emit(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": buf.anth_index,
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": buf.args,
+                                    },
+                                },
+                            )
+
+                if buf.started and not buf.closed and new_args:
+                    yield from self._emit(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": buf.anth_index,
+                            "delta": {"type": "input_json_delta", "partial_json": new_args},
+                        },
+                    )
 
             buf.args += new_args
 

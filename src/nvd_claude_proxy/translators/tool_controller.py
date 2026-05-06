@@ -126,6 +126,38 @@ class ToolInvocationController:
         """Return True when request tool schemas were provided."""
         return bool(self._tool_schemas)
 
+    def is_declared(self, name: str | None) -> bool:
+        """Whether a streamed tool name is considered declared and allowed.
+
+        Allows tools that are in the registered schemas, known internal tools,
+        or all tools if no schemas were provided.
+        """
+        if not name:
+            return False
+
+        # Claude Code internals that shouldn't be blocked even if missing from schemas
+        name_lower = name.lower()
+        _CLAUDE_CODE_INTERNAL_TOOLS = {
+            "str_replace_editor",
+            "bash",
+            "computer",
+            "websearch",
+            "web_search",
+            "mcp__server__tool",
+            "glob_search",
+            "grep_search",
+            "read_file",
+        }
+        if name in _CLAUDE_CODE_INTERNAL_TOOLS or name_lower in _CLAUDE_CODE_INTERNAL_TOOLS:
+            return True
+        if name_lower.startswith(("mcp__", "mcp_plugin_", "skill:")):
+            return True
+
+        if not self.has_registered_schemas():
+            return True
+
+        return self.has_tool_schema(name) or bool(self.resolve_tool_name(name))
+
     # ── parallel dispatch (proxy-local, future use) ───────────────────────
 
     async def invoke_parallel(self, calls: list[dict[str, Any]]) -> None:

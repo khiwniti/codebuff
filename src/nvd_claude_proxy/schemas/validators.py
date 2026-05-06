@@ -164,7 +164,7 @@ class ThinkingBlock(BaseModel):
     """Thinking content block (extended thinking)."""
 
     type: Literal["thinking"] = "thinking"
-    thinking: str = Field(..., min_length=1)
+    thinking: str = Field(..., min_length=0)
     signature: str = ""
 
 
@@ -214,7 +214,7 @@ class Message(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     role: Literal["user", "assistant", "system"]
-    content: str | list[ContentBlock]
+    content: Union[str, list[ContentBlock]]
 
     @field_validator("content")
     @classmethod

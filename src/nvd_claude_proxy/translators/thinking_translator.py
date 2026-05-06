@@ -73,10 +73,18 @@ def strip_prior_thinking_from_history(openai_messages: list[dict]) -> list[dict]
         elif isinstance(content, list):
             new_content = []
             for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
+                if not isinstance(block, dict):
+                    new_content.append(block)
+                    continue
+
+                btype = block.get("type")
+                if btype == "text":
                     txt = block.get("text", "")
                     cleaned = _THINK_RE.sub("", txt).lstrip()
                     new_content.append({**block, "text": cleaned})
+                elif btype in ("thinking", "redacted_thinking"):
+                    # Explicitly drop prior thinking blocks to avoid confusing the NIM
+                    continue
                 else:
                     new_content.append(block)
             out.append({**m, "content": new_content})

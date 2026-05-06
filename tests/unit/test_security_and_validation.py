@@ -111,7 +111,7 @@ class TestExtractURLsFromBody:
         assert ("https://example.com/image.png", "messages[0].content[0].source.url") in urls
 
     def test_extract_nested_urls(self):
-        """Should extract URLs from nested structures."""
+        """Should extract only structured media/document source URLs."""
         body = {
             "system": [
                 {"type": "image", "source": {"type": "url", "url": "https://example.com/logo.png"}}
@@ -119,7 +119,62 @@ class TestExtractURLsFromBody:
             "messages": [{"role": "user", "content": "Check this: https://example.com/doc.pdf"}],
         }
         urls = extract_urls_from_body(body)
-        assert any("example.com" in url for url, _ in urls)
+        assert ("https://example.com/logo.png", "system[0].source.url") in urls
+        assert not any(path == "messages[0].content" for _, path in urls)
+
+    def test_ignores_playwright_tool_result_local_urls(self):
+        """Claude Code Playwright snapshots may contain localhost URLs as text.
+
+        Those URLs are observations from a tool, not URLs this proxy will fetch.
+        Blocking them caused Claude Code to fail with:
+        "Request contains blocked URLs. This may indicate a security issue."
+        """
+        body = {
+            "model": "claude-opus-4-7",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "playwright",
+                            "input": {"url": "http://localhost:3000", "type": {"nested": "object"}},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": 'Page URL: http://127.0.0.1:3000/dashboard\n<a href="file:///etc/passwd">bad</a>',
+                        }
+                    ],
+                },
+            ],
+        }
+        assert extract_urls_from_body(body) == []
+
+    def test_blocks_structured_local_image_url(self):
+        """Actual fetchable image URL sources should still be blocked."""
+        body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "http://127.0.0.1/secret.png"},
+                        }
+                    ],
+                }
+            ]
+        }
+        assert extract_urls_from_body(body) == [
+            ("http://127.0.0.1/secret.png", "messages[0].content[0].source.url")
+        ]
 
 
 # ── Validation Tests ──────────────────────────────────────────────────────────

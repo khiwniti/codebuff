@@ -108,39 +108,39 @@ def is_url_blocked(url: str) -> tuple[bool, str]:
 
 
 def extract_urls_from_body(body: dict, path: str = "") -> list[tuple[str, str]]:
-    """Recursively extract all URLs from a request body.
+    """Extract only URLs that the proxy/upstream may dereference.
+
+    Claude Code and Playwright routinely put local/private URLs in ordinary
+    text, tool inputs, tool results, DOM snapshots, and tool schemas. Blocking
+    those strings breaks compatibility before the model can reason about the
+    tool result. SSRF protection should only inspect structured URL sources
+    that this proxy forwards as fetchable media/document inputs, not every URL
+    shaped substring in the conversation.
 
     Returns:
         List of (url, location_path) tuples
     """
     urls: list[tuple[str, str]] = []
 
+    def add_source_url(source: Any, current_path: str) -> None:
+        if not isinstance(source, dict):
+            return
+        if source.get("type") == "url" and isinstance(source.get("url"), str):
+            urls.append((source["url"], f"{current_path}.url"))
+
     def walk(obj: Any, current_path: str) -> None:
         if isinstance(obj, dict):
+            block_type = obj.get("type")
+            # Anthropic image/document blocks can carry `source: {type: "url"}`.
+            # These are the only URLs the proxy translates as actual remote
+            # content. Do not scan arbitrary keys named url/href/src in tool
+            # payloads or text snapshots. Some Claude Code/tool payloads contain
+            # nested dicts under keys named `type`, so guard before membership.
+            if isinstance(block_type, str) and block_type in {"image", "document"}:
+                add_source_url(obj.get("source"), f"{current_path}.source")
+
             for key, value in obj.items():
-                new_path = f"{current_path}.{key}" if current_path else key
-
-                # Check if this value looks like a URL
-                if isinstance(value, str) and (
-                    value.startswith("http://")
-                    or value.startswith("https://")
-                    or value.startswith("file://")
-                    or value.startswith("data:")
-                ):
-                    urls.append((value, new_path))
-                elif key in ("url", "source", "href", "src", "link"):
-                    if isinstance(value, str):
-                        urls.append((value, new_path))
-                    elif isinstance(value, dict):
-                        # Might have nested url
-                        if u := value.get("url"):
-                            urls.append((u, f"{new_path}.url"))
-                        if src := value.get("source"):
-                            if isinstance(src, dict):
-                                if u := src.get("url"):
-                                    urls.append((u, f"{new_path}.source.url"))
-
-                walk(value, new_path)
+                walk(value, f"{current_path}.{key}" if current_path else key)
         elif isinstance(obj, list):
             for idx, item in enumerate(obj):
                 walk(item, f"{current_path}[{idx}]")
@@ -431,6 +431,70 @@ def _get_client_ip(request: Request) -> str:
     return "unknown"
 
 
+# ── Authentication Middleware ────────────────────────────────────────────────
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Enforce PROXY_API_KEY protection globally across all routes.
+
+    Checks for API key in 'x-api-key' or 'Authorization: Bearer <key>' headers.
+    Skips check for the /health endpoint and when PROXY_API_KEY is not set.
+    """
+
+    # Endpoints that are always accessible without authentication
+    PUBLIC_PATHS: frozenset[str] = frozenset(
+        {
+            "/health",
+            "/v1/health",
+            "/docs",
+            "/openapi.json",
+        }
+    )
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        s = request.app.state.settings
+        if not s.proxy_api_key:
+            return await call_next(request)
+
+        # Skip auth for public paths
+        if request.url.path in self.PUBLIC_PATHS:
+            return await call_next(request)
+
+        # Skip auth if already authenticated in this session (optimized path)
+        session_obj = getattr(request.state, "session", None)
+        if session_obj and getattr(session_obj, "authenticated", False):
+            return await call_next(request)
+
+        presented = request.headers.get("x-api-key")
+        if not presented:
+            auth = request.headers.get("authorization", "")
+            if auth.lower().startswith("bearer "):
+                presented = auth[7:].strip()
+
+        if presented != s.proxy_api_key:
+            _log.warning(
+                "auth.failed",
+                path=request.url.path,
+                client_ip=_get_client_ip(request),
+            )
+            return ORJSONResponse(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "authentication_error",
+                        "message": "invalid proxy api key",
+                    },
+                },
+                status_code=401,
+            )
+
+        # Mark session as authenticated for this process lifetime
+        if session_obj:
+            session_obj.authenticated = True
+
+        return await call_next(request)
+
+
 # ── Composite Security Middleware ─────────────────────────────────────────────
 
 
@@ -439,14 +503,16 @@ def add_security_middleware(app: Any) -> None:
 
     Middleware order matters! From outermost to innermost:
     1. SecurityHeadersMiddleware (adds headers to responses)
-    2. SSRFProtectionMiddleware (validates request URLs)
-    3. SuspiciousRequestDetectionMiddleware (monitors suspicious activity)
-    4. RequestTimingMiddleware (timing + slow request detection)
-    5. AuditLoggerMiddleware (full audit trail)
+    2. AuthMiddleware (enforces API key protection)
+    3. SSRFProtectionMiddleware (validates request URLs)
+    4. SuspiciousRequestDetectionMiddleware (monitors suspicious activity)
+    5. RequestTimingMiddleware (timing + slow request detection)
+    6. AuditLoggerMiddleware (full audit trail)
     """
     # Get threshold from settings if available, else use default
     # Note: In a real implementation, you'd pass this via app.state
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(AuthMiddleware)
     app.add_middleware(SSRFProtectionMiddleware)
     app.add_middleware(SuspiciousRequestDetectionMiddleware)
     app.add_middleware(RequestTimingMiddleware, slow_request_threshold=30.0)

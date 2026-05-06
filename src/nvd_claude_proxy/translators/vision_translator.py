@@ -47,3 +47,26 @@ def anthropic_image_to_openai(block: dict) -> dict:
     if stype == "file":
         raise ValueError("Anthropic Files-API image source is not supported; send base64 or URL.")
     raise ValueError(f"Unknown image source type: {stype!r}")
+
+
+def openai_image_url_to_anthropic(image_url: dict) -> dict:
+    """OpenAI `image_url` object → Anthropic `image` content block."""
+    url = image_url.get("url", "")
+    if url.startswith("data:"):
+        # data:image/jpeg;base64,...
+        try:
+            prefix, data = url.split(",", 1)
+            media_type = prefix.split(":", 1)[1].split(";", 1)[0]
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": data,
+                },
+            }
+        except Exception:
+            # Fall back to URL if parsing fails
+            return {"type": "image", "source": {"type": "url", "url": url}}
+
+    return {"type": "image", "source": {"type": "url", "url": url}}

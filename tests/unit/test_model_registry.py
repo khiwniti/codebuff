@@ -3,8 +3,16 @@ from __future__ import annotations
 
 def test_exact_alias(model_registry):
     spec = model_registry.resolve("claude-opus-4-7")
-    # Match the actual config value
-    assert spec.nvidia_id == "nvidia/nemotron-3-ultra-500b-a50b"
+    assert spec.nvidia_id == "qwen/qwen3-coder-480b-a35b-instruct"
+    assert spec.supports_tools is True
+    assert spec.reasoning.style == "qwen-kwargs"
+
+
+def test_qwen3_coder_fallback_alias(model_registry):
+    spec = model_registry.resolve("claude-qwen3-coder")
+    assert spec.nvidia_id == "qwen/qwen3-coder-480b-a35b-instruct"
+    assert spec.supports_tools is True
+    assert spec.reasoning.style == "qwen-kwargs"
 
 
 def test_prefix_fallback(model_registry):
