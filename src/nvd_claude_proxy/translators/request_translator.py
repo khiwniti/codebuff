@@ -450,4 +450,11 @@ def translate_request(
     if transformer_chain:
         payload = transformer_chain.transform_request(payload)
 
+    # P1-13: Map service_tier to OpenAI equivalent
+    service_tier = anthropic_body.get("service_tier")
+    if service_tier == "high":
+        payload["service_tier"] = "auto"
+    elif service_tier == "standard":
+        payload["service_tier"] = "default"
+
     return payload

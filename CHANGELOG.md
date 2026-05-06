@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.11] — 2026-05-06
+
+### Fixed
+- **Auth Robustness** — The proxy now automatically strips leading/trailing whitespace from the presented API key and the configured secret. This prevents common 401 errors caused by trailing newlines in Secret Manager values.
+
+---
+
 ## [1.1.10] — 2026-05-06
 
 ### Added

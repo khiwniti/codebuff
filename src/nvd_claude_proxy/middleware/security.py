@@ -452,10 +452,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
             auth = request.headers.get("authorization", "")
             if auth.lower().startswith("bearer "):
                 presented = auth[7:].strip()
+        
+        if presented:
+            presented = presented.strip()
 
         import hmac
+        
+        # Robust check: strip both sides and use constant-time comparison
+        clean_target = (s.proxy_api_key or "").strip()
 
-        if not hmac.compare_digest(presented or "", s.proxy_api_key or ""):
+        if not hmac.compare_digest(presented or "", clean_target):
             _log.warning(
                 "auth.failed",
                 path=request.url.path,
