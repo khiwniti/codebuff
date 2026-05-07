@@ -189,29 +189,29 @@ export const getModelForMode = (
 ) => {
   if (operation === 'agent') {
     return {
-      free: models.openrouter_gemini2_5_flash,
-      normal: models.openrouter_claude_sonnet_4,
-      max: models.openrouter_claude_sonnet_4,
-      experimental: models.openrouter_gemini2_5_pro_preview,
-      ask: models.openrouter_gemini2_5_pro_preview,
+      free: 'meta/llama-3.1-405b-instruct' as const,
+      normal: 'meta/llama-3.1-405b-instruct' as const,
+      max: 'meta/llama-3.1-405b-instruct' as const,
+      experimental: 'meta/llama-3.1-405b-instruct' as const,
+      ask: 'meta/llama-3.1-405b-instruct' as const,
     }[costMode]
   }
   if (operation === 'file-requests') {
     return {
-      free: models.openrouter_claude_3_5_haiku,
-      normal: models.openrouter_claude_3_5_haiku,
-      max: models.openrouter_claude_sonnet_4,
-      experimental: models.openrouter_claude_sonnet_4,
-      ask: models.openrouter_claude_3_5_haiku,
+      free: 'meta/llama-3.1-405b-instruct' as const,
+      normal: 'meta/llama-3.1-405b-instruct' as const,
+      max: 'meta/llama-3.1-405b-instruct' as const,
+      experimental: 'meta/llama-3.1-405b-instruct' as const,
+      ask: 'meta/llama-3.1-405b-instruct' as const,
     }[costMode]
   }
   if (operation === 'check-new-files') {
     return {
-      free: models.openrouter_claude_3_5_haiku,
-      normal: models.openrouter_claude_sonnet_4,
-      max: models.openrouter_claude_sonnet_4,
-      experimental: models.openrouter_claude_sonnet_4,
-      ask: models.openrouter_claude_sonnet_4,
+      free: 'meta/llama-3.1-405b-instruct' as const,
+      normal: 'meta/llama-3.1-405b-instruct' as const,
+      max: 'meta/llama-3.1-405b-instruct' as const,
+      experimental: 'meta/llama-3.1-405b-instruct' as const,
+      ask: 'meta/llama-3.1-405b-instruct' as const,
     }[costMode]
   }
   throw new Error(`Unknown operation: ${operation}`)

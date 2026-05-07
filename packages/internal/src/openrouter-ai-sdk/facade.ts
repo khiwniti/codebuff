@@ -41,7 +41,7 @@ Custom headers to include in the requests.
   constructor(options: OpenRouterProviderSettings = {}) {
     this.baseURL =
       withoutTrailingSlash(options.baseURL ?? options.baseUrl) ??
-      'https://openrouter.ai/api/v1'
+      'https://integrate.api.nvidia.com/v1'
     this.apiKey = options.apiKey
     this.headers = options.headers
   }

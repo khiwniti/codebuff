@@ -78,8 +78,8 @@ export async function promptFlashWithFallbacks(
   }
 
   try {
-    // First try Gemini
-    return unwrapPromptResult(await promptAiSdk({ ...params, messages }))
+    // Override the model with meta/llama-3.1-405b-instruct
+    return unwrapPromptResult(await promptAiSdk({ ...params, messages, model: 'meta/llama-3.1-405b-instruct' }))
   } catch (error) {
     // Don't fall back on user-initiated aborts - propagate immediately
     if (isAbortError(error)) {
@@ -93,9 +93,7 @@ export async function promptFlashWithFallbacks(
       await promptAiSdk({
         ...params,
         messages,
-        model: useGPT4oInsteadOfClaude
-          ? openaiModels.gpt4o
-          : openrouterModels.openrouter_claude_3_5_haiku,
+        model: 'meta/llama-3.1-405b-instruct',
       }),
     )
   }

@@ -1,6 +1,8 @@
 const CUSTOM_MODEL_PREFIX = 'custom/'
-const isCustomModel = (model) => model.startsWith(CUSTOM_MODEL_PREFIX)
-const toCustomModelId = (model) =>
+import { describe, test, expect } from 'bun:test'
+
+const isCustomModel = (model: string) => model.startsWith(CUSTOM_MODEL_PREFIX)
+const toCustomModelId = (model: string) =>
   model.startsWith(CUSTOM_MODEL_PREFIX)
     ? model.slice(CUSTOM_MODEL_PREFIX.length)
     : model
