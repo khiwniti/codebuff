@@ -33,8 +33,8 @@ BLOCK_TYPE_TO_BETA = {
 class BetaNegotiator:
     """Handles negotiation and validation of 'anthropic-beta' feature flags."""
 
-    def __init__(self, presented_betas: Set[str]) -> None:
-        self.presented = presented_betas
+    def __init__(self, presented_betas: Set[str] | list[str]) -> None:
+        self.presented = set(presented_betas)
 
     def validate_request(self, body: dict) -> None:
         """Raise ValueError if the request requires a beta that was not presented."""
