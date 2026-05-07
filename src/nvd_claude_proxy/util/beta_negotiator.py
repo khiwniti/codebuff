@@ -61,8 +61,9 @@ class BetaNegotiator:
             if isinstance(obj, dict):
                 cc = obj.get("cache_control")
                 if isinstance(cc, dict) and cc.get("ttl") == "1h":
+                    # Loosened requirement: log instead of raising error for missing beta
                     if "extended-cache-ttl-2025-04-11" not in self.presented:
-                        raise ValueError("cache_control.ttl='1h' requires 'extended-cache-ttl-2025-04-11' beta.")
+                        _log.info("beta.missing_extended_ttl_beta", msg="Using 1h TTL without beta header, this may fail upstream")
                 for v in obj.values():
                     walk_cache_control(v)
             elif isinstance(obj, list):
