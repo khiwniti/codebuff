@@ -61,7 +61,7 @@ function createOpenRouterRequest(params: {
   fetch: typeof globalThis.fetch
 }) {
   const { body, openrouterApiKey, fetch } = params
-  return fetch('https://openrouter.ai/api/v1/chat/completions', {
+  return fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${openrouterApiKey ?? env.OPEN_ROUTER_API_KEY}`,
