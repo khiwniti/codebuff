@@ -7,6 +7,7 @@ export const ALLOWED_MODEL_PREFIXES = [
   'google',
   'x-ai',
   'deepseek',
+  'custom',
 ] as const
 
 export const costModes = [
@@ -138,6 +139,9 @@ export function supportsCacheControl(model: Model): boolean {
   if (model.startsWith('anthropic/')) {
     return true
   }
+  if (model.startsWith('custom/')) {
+    return false
+  }
   if (!isExplicitlyDefinedModel(model)) {
     // Default to no cache control for unknown models
     return false
@@ -181,4 +185,40 @@ export function getLogoForModel(modelName: string): string | undefined {
   return domain
     ? `https://www.google.com/s2/favicons?domain=${domain}&sz=256`
     : undefined
+}
+export const getModelForMode = (
+  costMode: CostMode,
+  operation: 'agent' | 'file-requests' | 'check-new-files',
+) => {
+  if (operation === 'agent') {
+    return {
+      free: 'meta/llama-3.1-405b-instruct' as const,
+      lite: 'meta/llama-3.1-405b-instruct' as const,
+      normal: 'meta/llama-3.1-405b-instruct' as const,
+      max: 'meta/llama-3.1-405b-instruct' as const,
+      experimental: 'meta/llama-3.1-405b-instruct' as const,
+      ask: 'meta/llama-3.1-405b-instruct' as const,
+    }[costMode]
+  }
+  if (operation === 'file-requests') {
+    return {
+      free: 'meta/llama-3.1-405b-instruct' as const,
+      lite: 'meta/llama-3.1-405b-instruct' as const,
+      normal: 'meta/llama-3.1-405b-instruct' as const,
+      max: 'meta/llama-3.1-405b-instruct' as const,
+      experimental: 'meta/llama-3.1-405b-instruct' as const,
+      ask: 'meta/llama-3.1-405b-instruct' as const,
+    }[costMode]
+  }
+  if (operation === 'check-new-files') {
+    return {
+      free: 'meta/llama-3.1-405b-instruct' as const,
+      lite: 'meta/llama-3.1-405b-instruct' as const,
+      normal: 'meta/llama-3.1-405b-instruct' as const,
+      max: 'meta/llama-3.1-405b-instruct' as const,
+      experimental: 'meta/llama-3.1-405b-instruct' as const,
+      ask: 'meta/llama-3.1-405b-instruct' as const,
+    }[costMode]
+  }
+  throw new Error(`Unknown operation: ${operation}`)
 }

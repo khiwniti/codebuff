@@ -1,0 +1,37 @@
+services:
+  db:
+    platform: linux/amd64
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: manicode_user_local
+      POSTGRES_PASSWORD: secretpassword_local
+      POSTGRES_DB: manicode_db_local
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'manicode_user_local']
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://manicode_user_local:secretpassword_local@db:5432/manicode_db_local
+      CODEBUFF_CUSTOM_MODEL_BASE_URL: 'https://integrate.api.nvidia.com/v1'
+      # Pass your Nvidia API key at runtime via -e or a .env file
+      CODEBUFF_CUSTOM_MODEL_API_KEY: '${CODEBUFF_CUSTOM_MODEL_API_KEY}'
+      PORT: 3000
+    ports:
+      - '3000:3000'
+    # By default the container starts the web UI. To use the CLI, replace the command.
+    # Example: docker compose run --rm app bun run start-cli
+    command: ['bun', 'run', 'start-web']
+
+volumes:
+  pgdata:

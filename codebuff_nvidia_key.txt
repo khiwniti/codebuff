@@ -1,0 +1,6 @@
+    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
+    EOF
+    
+    # Make sure it never gets committed
+    echo "codebuff_nvidia_key.txt" >> .gitignore
+    

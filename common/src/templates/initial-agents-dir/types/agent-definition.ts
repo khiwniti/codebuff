@@ -364,6 +364,9 @@ export type OutputTools = 'set_output'
 /**
  * AI models available for agents. Pick from our selection of recommended models or choose any model in OpenRouter.
  *
+ * For custom OpenAI-compatible endpoints, use the 'custom/' prefix followed by the model ID
+ * (e.g., 'custom/meta/llama-3.1-405b-instruct').
+ *
  * See available models at https://openrouter.ai/models
  */
 export type ModelName =

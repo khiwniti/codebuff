@@ -6,6 +6,10 @@
  */
 
 import { BYOK_OPENROUTER_ENV_VAR } from '@codebuff/common/constants/byok'
+import {
+  CUSTOM_MODEL_BASE_URL_ENV_VAR,
+  CUSTOM_MODEL_API_KEY_ENV_VAR,
+} from '@codebuff/common/constants/custom-model'
 import { CHATGPT_OAUTH_TOKEN_ENV_VAR } from '@codebuff/common/constants/chatgpt-oauth'
 import { API_KEY_ENV_VAR } from '@codebuff/common/constants/paths'
 import { getBaseEnv } from '@codebuff/common/env-process'
@@ -40,6 +44,14 @@ export const getSystemProcessEnv = (): NodeJS.ProcessEnv => {
 
 export const getByokOpenrouterApiKeyFromEnv = (): string | undefined => {
   return process.env[BYOK_OPENROUTER_ENV_VAR]
+}
+
+export const getCustomModelBaseUrlFromEnv = (): string | undefined => {
+  return process.env[CUSTOM_MODEL_BASE_URL_ENV_VAR]
+}
+
+export const getCustomModelApiKeyFromEnv = (): string | undefined => {
+  return process.env[CUSTOM_MODEL_API_KEY_ENV_VAR]
 }
 
 /**
