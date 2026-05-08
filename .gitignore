@@ -1,11 +1,16 @@
 .DS_Store
 .idea/
+.vscode/
 .vercel
+*.swp
+*.swo
 
 # Environment files (secrets) - Bun loads .env.* files natively
 .env
 .env.*
 !.env.example
+.env.local
+.env.*.local
 
 # ctags
 tags
@@ -21,6 +26,7 @@ npm-app/src/__tests__/data/
 .aider*
 .codebuff*
 **.log
+proxy.log
 
 debug/
 docs/bot-detection.md
@@ -31,3 +37,35 @@ docs/bot-detection.md
 
 # Infisical config (user-specific)
 .infisical.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+build/
+.eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# mypy / ruff
+.mypy_cache/
+.ruff_cache/
+
+# Distribution
+*.tar.gz
+MANIFEST
