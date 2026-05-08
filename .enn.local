@@ -10,8 +10,6 @@ SILICONFLOW_API_KEY=dummy_siliconflow_key
 # Database & Server
 DATABASE_URL=postgresql://manicode_user_local:secretpassword_local@localhost:5432/manicode_db_local
 PORT=4242
-CODEBUFF_CUSTOM_MODEL_BASE_URL=https://integrate.api.nvidia.com/v1
-CODEBUFF_CUSTOM_MODEL_API_KEY=
 
 # Authentication
 CODEBUFF_GITHUB_ID=dummy_github_id

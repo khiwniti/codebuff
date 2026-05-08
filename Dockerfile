@@ -33,7 +33,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl bash netcat-openbsd && rm -rf /var/lib/apt/lists/*
 
 # Copy Bun binary from builder
-COPY --from=builder /root/.bun /root/.bun
+# Install Bun directly in runtime stage (avoid copying missing directory)
+RUN curl -fsSL https://bun.sh/install | bash && \
+    chmod +x /root/.bun/bin/bun && \
+    ln -s /root/.bun/bin/bun /usr/local/bin/bun
 # Copy application code
 COPY --from=builder /app /app
 

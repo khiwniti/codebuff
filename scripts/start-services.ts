@@ -208,7 +208,7 @@ async function checkHealth(): Promise<boolean> {
   }
 }
 
-async function waitForHealth(timeoutSeconds: number = 60): Promise<boolean> {
+async function waitForHealth(timeoutSeconds: number = 180): Promise<boolean> {
   const startTime = Date.now()
   const timeoutMs = timeoutSeconds * 1000
   let frame = 0
