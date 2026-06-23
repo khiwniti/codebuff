@@ -266,6 +266,13 @@ async function main(): Promise<void> {
     React.useEffect(() => {
       const apiKey = getAuthTokenDetails().token ?? ''
 
+      // In freebuff mode, skip auth requirement entirely
+      if (IS_FREEBUFF) {
+        setRequireAuth(false)
+        setHasInvalidCredentials(false)
+        return
+      }
+
       if (!apiKey) {
         setRequireAuth(true)
         setHasInvalidCredentials(false)

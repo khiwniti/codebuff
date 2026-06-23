@@ -1,0 +1,12 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "bun run build",
+  "devCommand": "bun run dev",
+  "installCommand": "bun install",
+  "regions": ["iad1"],
+  "env": {
+    "NEXT_PUBLIC_CB_ENVIRONMENT": "prod",
+    "NEXT_PUBLIC_CODEBUFF_APP_URL": "https://openbuff.dev",
+    "FREEBUFF_MODE": "true"
+  }
+}
