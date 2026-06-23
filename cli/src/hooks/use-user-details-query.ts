@@ -9,7 +9,7 @@ import type {
   UserField,
   UserDetails,
 } from '../utils/codebuff-api'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 
 // Re-export types for backwards compatibility
 export type { UserField, UserDetails }
@@ -37,12 +37,13 @@ export async function fetchUserDetails<T extends UserField>({
   logger = defaultLogger,
   apiClient: providedApiClient,
 }: FetchUserDetailsParams<T>): Promise<UserDetails<T> | null> {
-  const apiClient =
-    providedApiClient ??
-    (() => {
-      setApiClientAuthToken(authToken)
-      return getApiClient()
-    })()
+  let apiClient: CodebuffApiClient
+  if (providedApiClient) {
+    apiClient = providedApiClient
+  } else {
+    setApiClientAuthToken(authToken)
+    apiClient = getApiClient()
+  }
 
   const response = await apiClient.me(fields)
 

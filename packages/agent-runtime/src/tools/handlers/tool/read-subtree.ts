@@ -1,5 +1,5 @@
-import { getAllFilePaths } from '@codebuff/common/project-file-tree'
-import { jsonToolResult } from '@codebuff/common/util/messages'
+import { getAllFilePaths } from '@khiwniti/common/project-file-tree'
+import { jsonToolResult } from '@khiwniti/common/util/messages'
 
 import { truncateFileTreeBasedOnTokenBudget } from '../../../system-prompt/truncate-file-tree'
 
@@ -7,12 +7,12 @@ import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+} from '@khiwniti/common/tools/list'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 import type {
   FileTreeNode,
   ProjectFileContext,
-} from '@codebuff/common/util/file'
+} from '@khiwniti/common/util/file'
 
 type ToolName = 'read_subtree'
 export const handleReadSubtree = (async (params: {
@@ -112,7 +112,10 @@ export const handleReadSubtree = (async (params: {
     | { path: string; errorMessage: string }
   > = []
 
-  for (const p of requested) {
+  for (const rawPath of requested) {
+    // Strip trailing slashes so paths like 'src/' resolve to 'src'
+    const p = rawPath.replace(/\/+$/, '')
+
     if (p === '.' || p === '/' || p === '') {
       outputs.push(buildDirectoryResult(fileContext.fileTree, p))
       continue

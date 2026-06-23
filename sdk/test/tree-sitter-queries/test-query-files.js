@@ -1,10 +1,10 @@
 // Test that tree-sitter query files are properly bundled and functional
 const fs = require('fs')
-const path = require('path')
 const os = require('os')
+const path = require('path')
 
 // Import the SDK functionality we want to test
-const { initialSessionState } = require('@codebuff/sdk')
+const { initialSessionState } = require('@openbuff/sdk')
 
 // Create sample source files for different languages to test tree-sitter parsing
 const testSourceFiles = {

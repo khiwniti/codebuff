@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { logger } from '../utils/logger'
 
-import type { PendingAttachment } from '../state/chat-store'
+import type { PendingAttachment } from '../types/store'
 
 export type StreamStatus = 'idle' | 'waiting' | 'streaming'
 
@@ -83,12 +83,7 @@ export const useMessageQueue = (
       return
     }
 
-    // Log why queue is blocked (only when there are messages waiting)
     if (!canProcessQueue) {
-      logger.debug(
-        { queueLength, canProcessQueue },
-        '[message-queue] Queue blocked: canProcessQueue disabled',
-      )
       return
     }
     if (streamStatus !== 'idle') {

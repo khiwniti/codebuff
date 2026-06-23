@@ -1,7 +1,6 @@
-import type { ContentBlock } from '../../types/chat'
 
-export function trimTrailingNewlines(str: string): string {
-  return str.replace(/\n+$/, '')
+export function trimNewlines(str: string): string {
+  return str.replace(/^\n+|\n+$/g, '')
 }
 
 export function sanitizePreview(text: string): string {

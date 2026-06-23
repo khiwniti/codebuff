@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { setAllBlocksCollapsedState, hasAnyExpandedBlocks } from '../utils/collapse-helpers'
 import { buildMessageTree } from '../utils/message-tree-utils'
 
 import type { ChatMessage, ContentBlock } from '../types/chat'
@@ -42,6 +43,8 @@ export interface UseChatMessagesReturn {
   isUserCollapsing: () => boolean
   /** Handler to load more previous messages */
   handleLoadPreviousMessages: () => void
+  /** Handler to toggle all collapsed/expanded state in all AI responses */
+  handleToggleAll: () => void
 }
 
 /**
@@ -113,11 +116,11 @@ export function useChatMessages({
               // Handle thinking blocks - just match by thinkingId
               if (block.type === 'text' && block.thinkingId === id) {
                 foundTarget = true
-                const wasCollapsed = block.isCollapsed ?? false
+                const isExpanded = block.thinkingCollapseState === 'expanded'
                 return {
                   ...block,
-                  isCollapsed: !wasCollapsed,
-                  userOpened: wasCollapsed, // Mark as user-opened if expanding
+                  thinkingCollapseState: isExpanded ? 'preview' as const : 'expanded' as const,
+                  userOpened: !isExpanded, // Mark as user-opened if expanding
                 }
               }
 
@@ -181,7 +184,9 @@ export function useChatMessages({
         })
       })
 
-      // Reset flag after state update completes
+      // Reset flag after state update completes.
+      // Uses setTimeout(0) to defer until after React's batched state updates
+      // have been applied, ensuring the flag stays true during the render cycle.
       setTimeout(() => {
         isUserCollapsingRef.current = false
       }, 0)
@@ -195,6 +200,29 @@ export function useChatMessages({
   const handleLoadPreviousMessages = useCallback(() => {
     setVisibleMessageCount((prev) => prev + MESSAGE_BATCH_SIZE)
   }, [])
+
+  /**
+   * Toggles all collapsible blocks in all AI responses.
+   * Primary action is to collapse all. Only expands if everything is already collapsed.
+   */
+  const handleToggleAll = useCallback(() => {
+    isUserCollapsingRef.current = true
+
+    setMessages((prevMessages) => {
+      // Primary action: collapse all open blocks
+      // Only expand if everything is already collapsed
+      const allCollapsed = !hasAnyExpandedBlocks(prevMessages)
+      const shouldCollapse = !allCollapsed
+      return setAllBlocksCollapsedState(prevMessages, shouldCollapse)
+    })
+
+    // Reset flag after state update completes.
+    // Uses setTimeout(0) to defer until after React's batched state updates
+    // have been applied, ensuring the flag stays true during the render cycle.
+    setTimeout(() => {
+      isUserCollapsingRef.current = false
+    }, 0)
+  }, [setMessages])
 
   // Build message tree from flat messages array
   const { tree: messageTree, topLevelMessages } = useMemo(
@@ -221,5 +249,6 @@ export function useChatMessages({
     handleCollapseToggle,
     isUserCollapsing,
     handleLoadPreviousMessages,
+    handleToggleAll,
   }
 }

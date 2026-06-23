@@ -2,14 +2,15 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { getCiEnv } from '@codebuff/common/env-ci'
-import { env } from '@codebuff/common/env'
+import { env } from '@khiwniti/common/env'
+import { getCiEnv } from '@khiwniti/common/env-ci'
 import { z } from 'zod'
 
-import type { CiEnv } from '@codebuff/common/types/contracts/env'
 
 import { getApiClient, setApiClientAuthToken } from './codebuff-api'
 import { logger } from './logger'
+
+import type { CiEnv } from '@khiwniti/common/types/contracts/env'
 
 // User schema
 const userSchema = z.object({
@@ -24,20 +25,9 @@ const userSchema = z.object({
 
 export type User = z.infer<typeof userSchema>
 
-// Claude OAuth credentials schema (for passthrough, not strict validation here)
-const claudeOAuthSchema = z
-  .object({
-    accessToken: z.string(),
-    refreshToken: z.string(),
-    expiresAt: z.number(),
-    connectedAt: z.number(),
-  })
-  .optional()
-
 const credentialsSchema = z
   .object({
     default: userSchema.optional(),
-    claudeOAuth: claudeOAuthSchema,
   })
   .catchall(z.unknown())
 

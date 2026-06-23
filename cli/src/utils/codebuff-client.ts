@@ -1,15 +1,16 @@
-import { API_KEY_ENV_VAR } from '@codebuff/common/old-constants'
-import { AskUserBridge } from '@codebuff/common/utils/ask-user-bridge'
-import { CodebuffClient } from '@codebuff/sdk'
+import { API_KEY_ENV_VAR } from '@khiwniti/common/old-constants'
+import { AskUserBridge } from '@khiwniti/common/utils/ask-user-bridge'
+import { CodebuffClient } from '@khiwniti/sdk'
 
 import { getAuthTokenDetails } from './auth'
 import { getCliEnv, getSystemProcessEnv } from './env'
 import { loadAgentDefinitions } from './local-agent-registry'
 import { logger } from './logger'
+import { createTraceWriter } from './trace-writer'
 import { getRgPath } from '../native/ripgrep'
 import { getProjectRoot } from '../project-files'
 
-import type { ClientToolCall } from '@codebuff/common/tools/list'
+import type { ClientToolCall } from '@khiwniti/common/tools/list'
 
 let clientInstance: CodebuffClient | null = null
 
@@ -76,6 +77,8 @@ export async function getCodebuffClient(): Promise<CodebuffClient | null> {
         apiKey,
         cwd: projectRoot,
         agentDefinitions,
+        logger,
+        traceWriter: createTraceWriter(),
         overrideTools: {
           ask_user: async (input: ClientToolCall<'ask_user'>['input']) => {
             const askUserResponse = await AskUserBridge.request(

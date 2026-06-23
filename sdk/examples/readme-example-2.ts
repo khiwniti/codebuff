@@ -1,8 +1,8 @@
 import { z } from 'zod/v4'
 
-import { CodebuffClient, getCustomToolDefinition } from '@codebuff/sdk'
+import { CodebuffClient, getCustomToolDefinition } from '@khiwniti/sdk'
 
-import type { AgentDefinition } from '@codebuff/sdk'
+import type { AgentDefinition } from '@khiwniti/sdk'
 
 async function main() {
   const client = new CodebuffClient({
@@ -16,7 +16,7 @@ async function main() {
   // Define your own custom agents!
   const myCustomAgent: AgentDefinition = {
     id: 'my-custom-agent',
-    model: 'x-ai/grok-4-fast',
+    model: 'google/gemini-3.1-flash-lite-preview',
     displayName: 'Sentiment analyzer',
     toolNames: ['fetch_api_data'], // Defined below!
     instructionsPrompt: `

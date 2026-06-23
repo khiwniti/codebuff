@@ -1,12 +1,12 @@
-import * as analytics from '@codebuff/common/analytics'
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
+import * as analytics from '@khiwniti/common/analytics'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
 import {
   assistantMessage,
   jsonToolResult,
   userMessage,
-} from '@codebuff/common/util/messages'
+} from '@khiwniti/common/util/messages'
 import {
   afterEach,
   beforeEach,
@@ -27,17 +27,17 @@ import * as toolExecutor from '../tools/tool-executor'
 
 import type { AgentTemplate, StepGenerator } from '../templates/types'
 import type { executeToolCall } from '../tools/tool-executor'
-import type { PublicAgentState } from '@codebuff/common/types/agent-template'
+import type { PublicAgentState } from '@khiwniti/common/types/agent-template'
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
-} from '@codebuff/common/types/contracts/agent-runtime'
-import type { SendActionFn } from '@codebuff/common/types/contracts/client'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsOf } from '@codebuff/common/types/function-params'
-import type { ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
-import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
-import type { AgentState } from '@codebuff/common/types/session-state'
+} from '@khiwniti/common/types/contracts/agent-runtime'
+import type { SendActionFn } from '@khiwniti/common/types/contracts/client'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsOf } from '@khiwniti/common/types/function-params'
+import type { ToolMessage } from '@khiwniti/common/types/messages/codebuff-message'
+import type { ToolResultOutput } from '@khiwniti/common/types/messages/content-part'
+import type { AgentState } from '@khiwniti/common/types/session-state'
 
 const logger: Logger = {
   debug: () => {},
@@ -50,7 +50,7 @@ describe('runProgrammaticStep', () => {
   let mockTemplate: AgentTemplate
   let mockAgentState: AgentState
   let mockParams: ParamsOf<typeof runProgrammaticStep>
-  let executeToolCallSpy: any
+  let executeToolCallSpy: ReturnType<typeof spyOn<typeof toolExecutor, 'executeToolCall'>>
   let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
 
   beforeEach(() => {
@@ -806,7 +806,7 @@ describe('runProgrammaticStep', () => {
 
       mockTemplate.handleSteps = () => mockGenerator
 
-      const responseChunks: any[] = []
+      const responseChunks: unknown[] = []
       mockParams.onResponseChunk = (chunk) => responseChunks.push(chunk)
 
       const result = await runProgrammaticStep(mockParams)
@@ -814,7 +814,7 @@ describe('runProgrammaticStep', () => {
       expect(result.endTurn).toBe(true)
       expect(result.agentState.output?.error).toContain('Generator error')
       expect(
-        responseChunks.some((chunk) => chunk.includes('Generator error')),
+        responseChunks.some((chunk) => typeof chunk === 'string' && chunk.includes('Generator error')),
       ).toBe(true)
     })
 
@@ -827,7 +827,7 @@ describe('runProgrammaticStep', () => {
       mockTemplate.handleSteps = () => mockGenerator
       executeToolCallSpy.mockRejectedValue(new Error('Tool execution failed'))
 
-      const responseChunks: any[] = []
+      const responseChunks: unknown[] = []
       mockParams.onResponseChunk = (chunk) => responseChunks.push(chunk)
 
       const result = await runProgrammaticStep(mockParams)
@@ -887,9 +887,9 @@ describe('runProgrammaticStep', () => {
 
       const result = await runProgrammaticStep({
         ...mockParams,
-        template: schemaTemplate,
-        localAgentTemplates: { 'test-agent': schemaTemplate },
-      } as any)
+        template: schemaTemplate as unknown as AgentTemplate,
+        localAgentTemplates: { 'test-agent': schemaTemplate as unknown as AgentTemplate },
+      })
 
       expect(result.endTurn).toBe(true)
       expect(result.agentState.output).toEqual({
@@ -932,14 +932,14 @@ describe('runProgrammaticStep', () => {
       // Don't mock executeToolCall - let it use the real implementation
       executeToolCallSpy.mockRestore()
 
-      const responseChunks: any[] = []
+      const responseChunks: unknown[] = []
       mockParams.onResponseChunk = (chunk) => responseChunks.push(chunk)
 
       const result = await runProgrammaticStep({
         ...mockParams,
-        template: schemaTemplate,
-        localAgentTemplates: { 'test-agent': schemaTemplate },
-      } as any)
+        template: schemaTemplate as unknown as AgentTemplate,
+        localAgentTemplates: { 'test-agent': schemaTemplate as unknown as AgentTemplate },
+      })
 
       // Should end turn (validation may fail but execution continues)
       expect(result.endTurn).toBe(true)
@@ -1413,7 +1413,7 @@ describe('runProgrammaticStep', () => {
           if (options.toolName === 'set_output') {
             options.agentState.output = options.input
           } else if (options.toolName === 'add_subgoal') {
-            options.agentState.agentContext[options.input.id as any] = {
+            options.agentState.agentContext[options.input.id as string] = {
               ...options.input,
               logs: [],
             }
@@ -1447,12 +1447,12 @@ describe('runProgrammaticStep', () => {
   describe('yield value validation', () => {
     it('should reject invalid yield values', async () => {
       const mockGenerator = (function* () {
-        yield { invalid: 'value' } as any
+        yield { invalid: 'value' } as unknown
       })() as StepGenerator
 
       mockTemplate.handleSteps = () => mockGenerator
 
-      const responseChunks: any[] = []
+      const responseChunks: unknown[] = []
       mockParams.onResponseChunk = (chunk) => responseChunks.push(chunk)
 
       const result = await runProgrammaticStep(mockParams)
@@ -1465,12 +1465,12 @@ describe('runProgrammaticStep', () => {
 
     it('should reject yield values with wrong types', async () => {
       const mockGenerator = (function* () {
-        yield { type: 'STEP_TEXT', text: 123 } as any // text should be string
+        yield { type: 'STEP_TEXT', text: 123 } as unknown // text should be string
       })() as StepGenerator
 
       mockTemplate.handleSteps = () => mockGenerator
 
-      const responseChunks: any[] = []
+      const responseChunks: unknown[] = []
       mockParams.onResponseChunk = (chunk) => responseChunks.push(chunk)
 
       const result = await runProgrammaticStep(mockParams)
@@ -1483,12 +1483,12 @@ describe('runProgrammaticStep', () => {
 
     it('should reject GENERATE_N with non-positive n', async () => {
       const mockGenerator = (function* () {
-        yield { type: 'GENERATE_N', n: 0 } as any
+        yield { type: 'GENERATE_N', n: 0 } as unknown
       })() as StepGenerator
 
       mockTemplate.handleSteps = () => mockGenerator
 
-      const responseChunks: any[] = []
+      const responseChunks: unknown[] = []
       mockParams.onResponseChunk = (chunk) => responseChunks.push(chunk)
 
       const result = await runProgrammaticStep(mockParams)
@@ -1501,12 +1501,12 @@ describe('runProgrammaticStep', () => {
 
     it('should reject GENERATE_N with negative n', async () => {
       const mockGenerator = (function* () {
-        yield { type: 'GENERATE_N', n: -5 } as any
+        yield { type: 'GENERATE_N', n: -5 } as unknown
       })() as StepGenerator
 
       mockTemplate.handleSteps = () => mockGenerator
 
-      const responseChunks: any[] = []
+      const responseChunks: unknown[] = []
       mockParams.onResponseChunk = (chunk) => responseChunks.push(chunk)
 
       const result = await runProgrammaticStep(mockParams)
@@ -1608,7 +1608,7 @@ describe('runProgrammaticStep', () => {
 
     it('should reject random string values', async () => {
       const mockGenerator = (function* () {
-        yield 'INVALID_STEP' as any
+        yield 'INVALID_STEP' as unknown
       })() as StepGenerator
 
       mockTemplate.handleSteps = () => mockGenerator
@@ -1623,7 +1623,7 @@ describe('runProgrammaticStep', () => {
 
     it('should reject null yield values', async () => {
       const mockGenerator = (function* () {
-        yield null as any
+        yield null as unknown
       })() as StepGenerator
 
       mockTemplate.handleSteps = () => mockGenerator
@@ -1638,7 +1638,7 @@ describe('runProgrammaticStep', () => {
 
     it('should reject undefined yield values', async () => {
       const mockGenerator = (function* () {
-        yield undefined as any
+        yield undefined as unknown
       })() as StepGenerator
 
       mockTemplate.handleSteps = () => mockGenerator
@@ -1653,7 +1653,7 @@ describe('runProgrammaticStep', () => {
 
     it('should reject tool call without toolName', async () => {
       const mockGenerator = (function* () {
-        yield { input: { paths: ['test.txt'] } } as any
+        yield { input: { paths: ['test.txt'] } } as unknown
       })() as StepGenerator
 
       mockTemplate.handleSteps = () => mockGenerator
@@ -1668,7 +1668,7 @@ describe('runProgrammaticStep', () => {
 
     it('should reject tool call without input', async () => {
       const mockGenerator = (function* () {
-        yield { toolName: 'read_files' } as any
+        yield { toolName: 'read_files' } as unknown
       })() as StepGenerator
 
       mockTemplate.handleSteps = () => mockGenerator

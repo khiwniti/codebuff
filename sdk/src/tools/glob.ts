@@ -1,11 +1,11 @@
 import {
   flattenTree,
   getProjectFileTree,
-} from '@codebuff/common/project-file-tree'
+} from '@khiwniti/common/project-file-tree'
 import micromatch from 'micromatch'
 
-import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
-import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { CodebuffToolOutput } from '@khiwniti/common/tools/list'
+import type { CodebuffFileSystem } from '@khiwniti/common/types/filesystem'
 
 export async function glob(params: {
   pattern: string

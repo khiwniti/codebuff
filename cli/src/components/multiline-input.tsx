@@ -1,5 +1,9 @@
-import { TextAttributes } from '@opentui/core'
-import { useKeyboard, useRenderer } from '@opentui/react'
+import {
+  decodePasteBytes,
+  stripAnsiSequences,
+  TextAttributes,
+} from '@opentui/core'
+import { useAppContext, useKeyboard, useRenderer } from '@opentui/react'
 import {
   forwardRef,
   useCallback,
@@ -11,20 +15,32 @@ import {
 
 import { InputCursor } from './input-cursor'
 import { useTheme } from '../hooks/use-theme'
-import { supportsTruecolor } from '../utils/theme-system'
 import { useChatStore } from '../state/chat-store'
-import { logger } from '../utils/logger'
+import {
+  getKeypadPrintableSequence,
+  isKeypadEnter,
+} from '../utils/keypad-keys'
 import { clamp } from '../utils/math'
+import {
+  isLinefeedActingAsEnter,
+  markReturnKeySeenForKey,
+} from '../utils/terminal-enter-detection'
+import { supportsTruecolor } from '../utils/theme-system'
 import { calculateNewCursorPosition } from '../utils/word-wrap-utils'
 
-import type { InputValue } from '../state/chat-store'
+import type { InputValue } from '../types/store'
 import type {
   KeyEvent,
   MouseEvent,
+  PasteEvent,
   ScrollBoxRenderable,
   TextBufferView,
   TextRenderable,
 } from '@opentui/core'
+
+function getPasteText(event: PasteEvent): string {
+  return stripAnsiSequences(decodePasteBytes(event.bytes))
+}
 
 // Helper functions for text manipulation
 function findLineStart(text: string, cursor: number): number {
@@ -82,25 +98,39 @@ const TAB_WIDTH = 4
 /**
  * Check if a key event represents printable character input (not a special key).
  * Uses a positive heuristic based on key.name length rather than a brittle deny-list.
- * 
+ *
  * The key insight is that OpenTUI's parser assigns descriptive multi-character names
  * to special keys (like 'backspace', 'up', 'f1') while regular printable characters
  * either have no name (multi-byte input like Chinese) or a single-character name.
  */
 function isPrintableCharacterKey(key: KeyEvent): boolean {
   const name = key.name
-  
+
   // No name = likely multi-byte input (Chinese, Japanese, Korean, etc.) - treat as printable
   if (!name) return true
-  
+
   // Single character name = regular ASCII printable (a, b, 1, $, etc.)
   if (name.length === 1) return true
-  
+
   // Special case: space key has name 'space' but is printable
   if (name === 'space') return true
-  
+
   // Multi-char name = special key (up, f1, backspace, etc.)
   return false
+}
+
+function getPrintableKeySequence(key: KeyEvent): string | null {
+  if (!key.sequence || key.sequence.length < 1) return null
+  if (key.ctrl || key.meta || key.option) return null
+
+  const keypadValue = getKeypadPrintableSequence(key)
+  if (keypadValue !== null) return keypadValue
+
+  if (!CONTROL_CHAR_REGEX.test(key.sequence) && isPrintableCharacterKey(key)) {
+    return key.sequence
+  }
+
+  return null
 }
 
 // Helper to convert render position (in tab-expanded string) to original text position
@@ -160,6 +190,7 @@ interface MultilineInputProps {
   maxHeight?: number
   minHeight?: number
   cursorPosition: number
+  showScrollbar?: boolean
 }
 
 export type MultilineInputHandle = {
@@ -183,11 +214,14 @@ export const MultilineInput = forwardRef<
     minHeight = 1,
     onKeyIntercept,
     cursorPosition,
+    showScrollbar = false,
   }: MultilineInputProps,
   forwardedRef,
 ) {
   const theme = useTheme()
   const renderer = useRenderer()
+  const appContext = useAppContext()
+  const { keyHandler } = appContext
   const hookBlinkValue = useChatStore((state) => state.isFocusSupported)
   const effectiveShouldBlinkCursor = shouldBlinkCursor ?? hookBlinkValue
 
@@ -195,6 +229,17 @@ export const MultilineInput = forwardRef<
   const [lastActivity, setLastActivity] = useState(Date.now())
 
   const stickyColumnRef = useRef<number | null>(null)
+
+  // Refs to track latest value and cursor position synchronously for IME input handling.
+  // When IME sends multiple character events rapidly (e.g., Chinese input), React batches
+  // state updates, causing subsequent events to see stale closure values. These refs are
+  // updated synchronously to ensure each keystroke builds on the previous one.
+  const valueRef = useRef(value)
+  const cursorPositionRef = useRef(cursorPosition)
+
+  // Keep refs current on every render (synchronous assignment avoids useEffect timing issues)
+  valueRef.current = value
+  cursorPositionRef.current = cursorPosition
 
   // Helper to get or set the sticky column for vertical navigation.
   // When stickyColumnRef.current is set, we return it (preserving column across
@@ -259,7 +304,7 @@ export const MultilineInput = forwardRef<
   const cursorRow = lineInfo
     ? Math.max(
         0,
-        lineInfo.lineStarts.findLastIndex(
+        lineInfo.lineStartCols.findLastIndex(
           (lineStart) => lineStart <= cursorPosition,
         ),
       )
@@ -335,31 +380,50 @@ export const MultilineInput = forwardRef<
       const selection = getSelectionRange()
       if (selection) {
         // Replace selected text with the new text
-        const newValue =
-          value.slice(0, selection.start) +
-          textToInsert +
-          value.slice(selection.end)
         clearSelection()
+        // Read from refs which have the latest values (updated synchronously below)
+        const currentValue = valueRef.current
+        const newValue =
+          currentValue.slice(0, selection.start) +
+          textToInsert +
+          currentValue.slice(selection.end)
+        const newCursor = selection.start + textToInsert.length
+
+        // Update refs synchronously BEFORE calling onChange - critical for IME input
+        // where multiple characters may arrive before React processes state updates
+        valueRef.current = newValue
+        cursorPositionRef.current = newCursor
+
         onChange({
           text: newValue,
-          cursorPosition: selection.start + textToInsert.length,
+          cursorPosition: newCursor,
           lastEditDueToNav: false,
         })
         return
       }
 
       // No selection, insert at cursor
+      // Read from refs to get latest state (handles rapid IME input)
+      const currentValue = valueRef.current
+      const currentCursor = cursorPositionRef.current
       const newValue =
-        value.slice(0, cursorPosition) +
+        currentValue.slice(0, currentCursor) +
         textToInsert +
-        value.slice(cursorPosition)
+        currentValue.slice(currentCursor)
+      const newCursor = currentCursor + textToInsert.length
+
+      // Update refs synchronously BEFORE calling onChange - critical for IME input
+      // where multiple characters may arrive before React processes state updates
+      valueRef.current = newValue
+      cursorPositionRef.current = newCursor
+
       onChange({
         text: newValue,
-        cursorPosition: cursorPosition + textToInsert.length,
+        cursorPosition: newCursor,
         lastEditDueToNav: false,
       })
     },
-    [cursorPosition, onChange, value, getSelectionRange, clearSelection],
+    [onChange, getSelectionRange, clearSelection],
   )
 
   const moveCursor = useCallback(
@@ -386,7 +450,7 @@ export const MultilineInput = forwardRef<
       const scrollBox = scrollBoxRef.current
       if (!scrollBox) return
 
-      const lineStarts = lineInfo?.lineStarts ?? [0]
+      const lineStarts = lineInfo?.lineStartCols ?? [0]
 
       const viewport = (scrollBox as any).viewport
       const viewportTop = Number(viewport?.y ?? 0)
@@ -489,11 +553,17 @@ export const MultilineInput = forwardRef<
   const handleEnterKeys = useCallback(
     (key: KeyEvent): boolean => {
       const lowerKeyName = (key.name ?? '').toLowerCase()
-      const isEnterKey = key.name === 'return' || key.name === 'enter'
-      // Ctrl+J is translated by the terminal to a linefeed character (0x0a)
-      // So we detect it by checking for name === 'linefeed' rather than ctrl + j
+      const keypadEnter = isKeypadEnter(key)
+      const isReturnOrEnter =
+        key.name === 'return' || key.name === 'enter' || keypadEnter
+
+      markReturnKeySeenForKey(key)
+
+      const linefeedIsEnter = lowerKeyName === 'linefeed' && isLinefeedActingAsEnter()
+      const isEnterKey = isReturnOrEnter || linefeedIsEnter
+
       const isCtrlJ =
-        lowerKeyName === 'linefeed' ||
+        (lowerKeyName === 'linefeed' && !linefeedIsEnter) ||
         (key.ctrl &&
           !key.meta &&
           !key.option &&
@@ -503,13 +573,20 @@ export const MultilineInput = forwardRef<
       if (!isEnterKey && !isCtrlJ) return false
 
       const isAltLikeModifier = isAltModifier(key)
+      // Kitty-protocol keyboards encode plain Enter as an escape sequence
+      // (e.g. \x1b[13u) but report modifiers reliably, so the escape-prefix
+      // and raw \r/\n heuristics (which exist to catch legacy Alt+Enter)
+      // must not apply to kitty events.
+      const isKittyKey = key.source === 'kitty'
       const hasEscapePrefix =
+        !isKittyKey &&
         typeof key.sequence === 'string' &&
         key.sequence.length > 0 &&
         key.sequence.charCodeAt(0) === 0x1b
       const hasBackslashBeforeCursor =
         cursorPosition > 0 && value[cursorPosition - 1] === '\\'
 
+      // Plain Enter: no modifiers, sequence is '\r' (macOS) or '\n' (Linux)
       const isPlainEnter =
         isEnterKey &&
         !key.shift &&
@@ -517,13 +594,15 @@ export const MultilineInput = forwardRef<
         !key.meta &&
         !key.option &&
         !isAltLikeModifier &&
-        !hasEscapePrefix &&
-        key.sequence === '\r' &&
+        (!hasEscapePrefix || keypadEnter) &&
+        (key.sequence === '\r' ||
+          key.sequence === '\n' ||
+          keypadEnter ||
+          isKittyKey) &&
         !hasBackslashBeforeCursor
-      const isShiftEnter =
-        isEnterKey && (Boolean(key.shift) || key.sequence === '\n')
+      const isShiftEnter = isEnterKey && Boolean(key.shift)
       const isOptionEnter =
-        isEnterKey && (isAltLikeModifier || hasEscapePrefix)
+        isEnterKey && !keypadEnter && (isAltLikeModifier || hasEscapePrefix)
       const isBackslashEnter = isEnterKey && hasBackslashBeforeCursor
 
       const shouldInsertNewline =
@@ -582,15 +661,7 @@ export const MultilineInput = forwardRef<
       if (key.ctrl && lowerKeyName === 'u' && !key.meta && !key.option) {
         preventKeyDefault(key)
         if (handleSelectionDeletion()) return true
-        const visualLineStart = lineInfo?.lineStarts?.[cursorRow] ?? lineStart
-
-        logger.debug('Ctrl+U:', {
-          cursorPosition,
-          cursorRow,
-          visualLineStart,
-          oldLineStart: lineStart,
-          lineStarts: lineInfo?.lineStarts,
-        })
+        const visualLineStart = lineInfo?.lineStartCols?.[cursorRow] ?? lineStart
 
         if (cursorPosition > visualLineStart) {
           const newValue =
@@ -775,7 +846,7 @@ export const MultilineInput = forwardRef<
 
       // Calculate visual line boundaries from lineInfo (accounts for word wrap)
       // Fall back to logical line boundaries if visual info is unavailable
-      const lineStarts = currentLineInfo?.lineStarts ?? []
+      const lineStarts = currentLineInfo?.lineStartCols ?? []
       const visualLineIndex = lineStarts.findLastIndex(
         (start) => start <= cursorPosition,
       )
@@ -962,18 +1033,10 @@ export const MultilineInput = forwardRef<
       }
 
       // Character input (including multi-byte characters from IME like Chinese, Japanese, Korean)
-      // Check for printable input: has a sequence, no modifier keys, and not a control character
-      if (
-        key.sequence &&
-        key.sequence.length >= 1 &&
-        !key.ctrl &&
-        !key.meta &&
-        !key.option &&
-        !CONTROL_CHAR_REGEX.test(key.sequence) &&
-        isPrintableCharacterKey(key)
-      ) {
+      const textToInsert = getPrintableKeySequence(key)
+      if (textToInsert !== null) {
         preventKeyDefault(key)
-        insertTextAtCursor(key.sequence)
+        insertTextAtCursor(textToInsert)
         return true
       }
 
@@ -981,6 +1044,50 @@ export const MultilineInput = forwardRef<
     },
     [insertTextAtCursor],
   )
+
+  // Increase StdinParser timeout from default 10ms to 100ms.
+  // Some terminals (Ghostty, iTerm2, VS Code) split bracketed paste sequences
+  // across multiple stdin reads when drag-dropping files. The default 10ms
+  // timeout causes the parser to flush partial escape sequences as keypresses,
+  // corrupting paste detection. 100ms is still fast for keyboard input but
+  // gives enough time for split paste sequences to arrive.
+  useEffect(() => {
+    const cliRenderer = appContext.renderer as Record<string, unknown> | null
+    const stdinBuffer = cliRenderer?._stdinBuffer as Record<string, unknown> | undefined
+    if (stdinBuffer && typeof stdinBuffer.timeoutMs === 'number') {
+      stdinBuffer.timeoutMs = 100
+    }
+  }, [appContext])
+
+  // Global paste event listener — catches paste events (e.g. from drag-and-drop)
+  // at the global level, plus a scrollbox-level backup. Some terminals may not
+  // deliver paste events reliably via one mechanism alone, so we use both with
+  // dedup to prevent double-handling.
+  const onPasteRef = useRef(onPaste)
+  onPasteRef.current = onPaste
+  const pasteHandledRef = useRef(false)
+
+  // Always listen for paste events regardless of terminal focus state.
+  // Drag-and-drop inherently causes the terminal to lose focus (the file
+  // manager has focus during the drag), so the paste listener must stay
+  // active even when `focused` is false.
+  useEffect(() => {
+    if (!keyHandler) return
+
+    const handlePaste = (event: PasteEvent) => {
+      pasteHandledRef.current = true
+      onPasteRef.current(getPasteText(event))
+      // Reset dedup flag after microtask so scrollbox handler (which fires
+      // synchronously after global listeners) sees it as handled, but future
+      // paste events are not blocked.
+      queueMicrotask(() => { pasteHandledRef.current = false })
+    }
+
+    keyHandler.on('paste', handlePaste)
+    return () => {
+      keyHandler.off('paste', handlePaste)
+    }
+  }, [keyHandler])
 
   // Main keyboard handler - delegates to specialized handlers
   useKeyboard(
@@ -1021,7 +1128,7 @@ export const MultilineInput = forwardRef<
     const effectiveMinHeight = Math.max(1, Math.min(minHeight, safeMaxHeight))
 
     const totalLines =
-      lineInfo === null ? 0 : lineInfo.lineStarts.length
+      lineInfo === null ? 0 : lineInfo.lineStartCols.length
 
     // Add bottom gutter when cursor is on line 2 of exactly 2 lines
     const gutterEnabled =
@@ -1034,9 +1141,13 @@ export const MultilineInput = forwardRef<
 
     const heightLines = Math.max(effectiveMinHeight, rawHeight)
 
+    // Content is scrollable when total lines exceed max height
+    const isScrollable = totalLines > safeMaxHeight
+
     return {
       heightLines,
       gutterEnabled,
+      isScrollable,
     }
   })()
 
@@ -1056,7 +1167,16 @@ export const MultilineInput = forwardRef<
       stickyScroll={true}
       stickyStart="bottom"
       scrollbarOptions={{ visible: false }}
-      onPaste={(event) => onPaste(event.text)}
+      verticalScrollbarOptions={{
+        visible: showScrollbar && layoutMetrics.isScrollable,
+        trackOptions: { width: 1 },
+      }}
+      onPaste={(event) => {
+        // Backup paste handler: fires if the global keyHandler listener
+        // didn't catch this event (dedup prevents double-handling)
+        if (pasteHandledRef.current) return
+        onPasteRef.current(getPasteText(event))
+      }}
       onMouseDown={handleMouseDown}
       style={{
         flexGrow: 0,

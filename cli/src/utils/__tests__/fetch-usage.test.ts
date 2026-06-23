@@ -4,7 +4,7 @@ import { fetchAndUpdateUsage } from '../fetch-usage'
 
 import type { CodebuffApiClient } from '../codebuff-api'
 import type { FetchAndUpdateUsageParams } from '../fetch-usage'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 
 describe('fetchAndUpdateUsage (deprecated)', () => {
   let setInputModeMock: ReturnType<typeof mock>
@@ -44,15 +44,15 @@ describe('fetchAndUpdateUsage (deprecated)', () => {
     loginStatus: mock(() =>
       Promise.resolve({ ok: true, status: 200, data: {} }),
     ) as CodebuffApiClient['loginStatus'],
-    referral: mock(() =>
-      Promise.resolve({ ok: true, status: 200, data: {} }),
-    ) as CodebuffApiClient['referral'],
     publish: mock(() =>
       Promise.resolve({ ok: true, status: 200, data: {} }),
     ) as CodebuffApiClient['publish'],
     logout: mock(() =>
       Promise.resolve({ ok: true, status: 200, data: {} }),
     ) as CodebuffApiClient['logout'],
+    feedback: mock(() =>
+      Promise.resolve({ ok: true, status: 200, data: {} }),
+    ) as CodebuffApiClient['feedback'],
     baseUrl: 'https://test.codebuff.com',
     authToken: 'test-auth-token',
   })

@@ -1,5 +1,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test'
 
+import type { FeedbackRequest } from '@khiwniti/common/schemas/feedback'
+
 import { createCodebuffApiClient } from '../codebuff-api'
 
 // Type for mocked fetch function
@@ -469,6 +471,108 @@ describe('createCodebuffApiClient', () => {
         'X-Custom-Header': 'custom-value',
         Authorization: 'Bearer my-token',
       })
+    })
+  })
+
+  describe('network error formatting', () => {
+    test('formats TLS certificate errors with proxy and trust-store guidance', async () => {
+      const mockTlsFetch = mock<MockFetch>(() => {
+        const error = new Error('self signed certificate in certificate chain')
+        return Promise.reject(error)
+      })
+
+      const client = createCodebuffApiClient({
+        baseUrl: 'https://freebuff.com',
+        fetch: mockTlsFetch as unknown as typeof fetch,
+      })
+
+      await expect(
+        client.post('/api/auth/cli/code', { fingerprintId: 'test' }),
+      ).rejects.toThrow(
+        'TLS certificate verification failed for https://freebuff.com.',
+      )
+    })
+
+    test('formats nested TLS certificate causes from fetch failures without retrying', async () => {
+      const mockTlsFetch = mock<MockFetch>(() => {
+        const cause = new Error('self signed certificate in certificate chain')
+        const error = new Error('fetch failed', { cause })
+        return Promise.reject(error)
+      })
+
+      const client = createCodebuffApiClient({
+        baseUrl: 'https://freebuff.com',
+        fetch: mockTlsFetch as unknown as typeof fetch,
+        retry: {
+          maxRetries: 3,
+          initialDelayMs: 10,
+        },
+      })
+
+      await expect(
+        client.post('/api/auth/cli/code', { fingerprintId: 'test' }),
+      ).rejects.toThrow(
+        'TLS certificate verification failed for https://freebuff.com.',
+      )
+      expect(mockTlsFetch).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('feedback method', () => {
+    const minimalFeedbackPayload: FeedbackRequest = {
+      category: 'other',
+      type: 'general',
+      text: 'test feedback',
+    }
+
+    test('should not retry on 429 (rate limit) responses', async () => {
+      const mockRateLimitFetch = mock<MockFetch>(() =>
+        Promise.resolve({
+          ok: false,
+          status: 429,
+          statusText: 'Too Many Requests',
+          json: () => Promise.resolve({ error: 'Rate limited' }),
+        } as Response),
+      )
+
+      const client = createCodebuffApiClient({
+        baseUrl: 'https://test.api',
+        fetch: mockRateLimitFetch as unknown as typeof fetch,
+        retry: { maxRetries: 3, initialDelayMs: 10 },
+      })
+
+      const result = await client.feedback(minimalFeedbackPayload)
+
+      expect(result.ok).toBe(false)
+      expect(result.status).toBe(429)
+      expect(mockRateLimitFetch).toHaveBeenCalledTimes(1)
+    })
+
+    test('should not retry on 500 responses (non-idempotent endpoint)', async () => {
+      const mockServerErrorFetch = mock<MockFetch>(() =>
+        Promise.resolve({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+          json: () => Promise.resolve({ error: 'Server error' }),
+        } as Response),
+      )
+
+      const client = createCodebuffApiClient({
+        baseUrl: 'https://test.api',
+        fetch: mockServerErrorFetch as unknown as typeof fetch,
+        retry: {
+          maxRetries: 3,
+          initialDelayMs: 10,
+          maxDelayMs: 50,
+        },
+      })
+
+      const result = await client.feedback(minimalFeedbackPayload)
+
+      expect(result.ok).toBe(false)
+      expect(result.status).toBe(500)
+      expect(mockServerErrorFetch).toHaveBeenCalledTimes(1)
     })
   })
 })

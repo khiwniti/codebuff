@@ -1,6 +1,6 @@
 import z from 'zod/v4'
 
-import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
+import { $getNativeToolCallExampleString, coerceToArray, jsonToolResultSchema } from '../utils'
 
 import type { $ToolParams } from '../../constants'
 
@@ -15,17 +15,21 @@ export const questionSchema = z.object({
       'Short label (max 12 chars) displayed as a chip/tag. Example: "Auth method"',
     ),
   options: z
-    .object({
-      label: z.string().describe('The display text for this option'),
-      description: z
-        .string()
-        .optional()
-        .describe('Explanation shown when option is focused'),
-    })
-    .array()
-    .refine((opts) => opts.length >= 2, {
-      message: 'Each question must have at least 2 options',
-    })
+    .preprocess(
+      coerceToArray,
+      z
+        .object({
+          label: z.string().describe('The display text for this option'),
+          description: z
+            .string()
+            .optional()
+            .describe('Explanation shown when option is focused'),
+        })
+        .array()
+        .refine((opts) => opts.length >= 2, {
+          message: 'Each question must have at least 2 options',
+        }),
+    )
     .describe('Array of answer options with label and optional description.'),
 
   multiSelect: z
@@ -64,8 +68,12 @@ const endsAgentStep = true
 const inputSchema = z
   .object({
     questions: z
-      .array(questionSchema)
-      .min(1, 'Must provide at least one question')
+      .preprocess(
+        coerceToArray,
+        z
+          .array(questionSchema)
+          .min(1, 'Must provide at least one question'),
+      )
       .describe('List of multiple choice questions to ask the user'),
   })
   .describe(
@@ -109,6 +117,8 @@ The user can either:
 - Select multiple options (multi-select mode, set multiSelect: true)
 - Type a custom answer in the "Other" text field
 - Skip the questions to provide different instructions instead
+
+IMPORTANT: Do NOT include options like "Custom", "Other", "None of the above", or similar catch-all options. The UI automatically provides a "Custom" text input field for users to type their own answer. Including such options would be redundant and confusing.
 
 Single-select example:
 ${$getNativeToolCallExampleString({

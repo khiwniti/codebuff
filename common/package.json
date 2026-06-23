@@ -1,7 +1,7 @@
 {
-  "name": "@codebuff/common",
+  "name": "@khiwniti/common",
   "version": "1.0.0",
-  "description": "Common utilities for Codebuff",
+  "description": "Common utilities for Openbuff",
   "private": true,
   "type": "module",
   "exports": {
@@ -18,7 +18,7 @@
   },
   "sideEffects": false,
   "engines": {
-    "bun": "^1.3.5"
+    "bun": "1.3.11"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.8.0",

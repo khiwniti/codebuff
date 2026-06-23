@@ -1,8 +1,8 @@
 import * as fs from 'fs'
 import path from 'path'
 
+import { CHAT_LOG_FILENAME, logger } from './logger'
 import { getProjectDataDir } from '../project-files'
-import { logger } from './logger'
 
 import type { ChatMessage } from '../types/chat'
 
@@ -11,6 +11,10 @@ export interface ChatHistoryEntry {
   lastPrompt: string
   timestamp: Date
   messageCount: number
+}
+
+function getChatsDir(): string {
+  return path.join(getProjectDataDir(), 'chats')
 }
 
 /**
@@ -43,14 +47,14 @@ interface ChatDirInfo {
  */
 export function getAllChats(maxChats: number = 500): ChatHistoryEntry[] {
   try {
-    const chatsDir = path.join(getProjectDataDir(), 'chats')
-    
+    const chatsDir = getChatsDir()
+
     if (!fs.existsSync(chatsDir)) {
       return []
     }
 
     const chatDirs = fs.readdirSync(chatsDir)
-    
+
     // First pass: get mtime for all chat directories (fast, no file reading)
     const chatDirInfos: ChatDirInfo[] = []
     for (const chatId of chatDirs) {
@@ -58,7 +62,7 @@ export function getAllChats(maxChats: number = 500): ChatHistoryEntry[] {
       try {
         const stat = fs.statSync(chatPath)
         if (!stat.isDirectory()) continue
-        
+
         chatDirInfos.push({
           chatId,
           chatPath,
@@ -69,14 +73,14 @@ export function getAllChats(maxChats: number = 500): ChatHistoryEntry[] {
         // Skip directories we can't stat
       }
     }
-    
+
     // Sort by mtime first (most recent first)
     chatDirInfos.sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
-    
+
     // Second pass: only read message content for the top N chats
     const chats: ChatHistoryEntry[] = []
     const chatsToLoad = chatDirInfos.slice(0, maxChats)
-    
+
     for (const info of chatsToLoad) {
       try {
         let messageCount = 0
@@ -89,16 +93,22 @@ export function getAllChats(maxChats: number = 500): ChatHistoryEntry[] {
           lastPrompt = getFirstUserPrompt(messages)
         }
 
-        chats.push({
-          chatId: info.chatId,
-          lastPrompt,
-          timestamp: info.mtime,
-          messageCount,
-        })
+        // Skip empty chats (no messages)
+        if (messageCount > 0) {
+          chats.push({
+            chatId: info.chatId,
+            lastPrompt,
+            timestamp: info.mtime,
+            messageCount,
+          })
+        }
       } catch (error) {
         logger.debug(
-          { chatId: info.chatId, error: error instanceof Error ? error.message : String(error) },
-          'Failed to read chat messages'
+          {
+            chatId: info.chatId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Failed to read chat messages',
         )
       }
     }
@@ -107,9 +117,94 @@ export function getAllChats(maxChats: number = 500): ChatHistoryEntry[] {
   } catch (error) {
     logger.error(
       { error: error instanceof Error ? error.message : String(error) },
-      'Failed to list chats'
+      'Failed to list chats',
     )
     return []
+  }
+}
+
+// Older CLI versions logged the full conversation (including attachments) to
+// log.jsonl on every step, leaving multi-GB files in chat directories. Delete
+// any log file over this cap; with summary-only logging, healthy logs stay
+// far below it.
+const MAX_LOG_FILE_BYTES = 10 * 1024 * 1024
+// Only delete logs from chats untouched for this long, so debug logs for
+// recent chats stay available.
+const MIN_LOG_AGE_MS = 14 * 24 * 60 * 60 * 1000
+
+/**
+ * Delete oversized log.jsonl files from chat directories that haven't been
+ * touched in 14+ days. Only debug logs are removed — chat history files are
+ * untouched.
+ */
+export function trimOversizedChatLogs(): void {
+  let chatsDir: string
+  let chatIds: string[]
+  try {
+    chatsDir = getChatsDir()
+    chatIds = fs.readdirSync(chatsDir)
+  } catch {
+    return // No project root set or no chats directory yet
+  }
+
+  const deleteBefore = Date.now() - MIN_LOG_AGE_MS
+  for (const chatId of chatIds) {
+    const logFile = path.join(chatsDir, chatId, CHAT_LOG_FILENAME)
+    try {
+      const stats = fs.statSync(logFile, { throwIfNoEntry: false })
+      if (
+        stats &&
+        stats.size > MAX_LOG_FILE_BYTES &&
+        stats.mtimeMs < deleteBefore
+      ) {
+        fs.unlinkSync(logFile)
+      }
+    } catch {
+      // Ignore errors for individual files
+    }
+  }
+}
+
+/**
+ * Delete a saved chat session from local history.
+ */
+export function deleteChatSession(chatId: string): boolean {
+  try {
+    const safeChatId = chatId.trim()
+    if (
+      !safeChatId ||
+      safeChatId === '.' ||
+      safeChatId === '..' ||
+      path.basename(safeChatId) !== safeChatId
+    ) {
+      logger.warn({ chatId }, 'Refusing to delete invalid chat id')
+      return false
+    }
+
+    const chatsDir = getChatsDir()
+    const chatPath = path.join(chatsDir, safeChatId)
+
+    if (!fs.existsSync(chatPath)) {
+      return false
+    }
+
+    const stat = fs.statSync(chatPath)
+    if (!stat.isDirectory()) {
+      logger.warn(
+        { chatId, chatPath },
+        'Refusing to delete non-directory chat path',
+      )
+      return false
+    }
+
+    fs.rmSync(chatPath, { recursive: true, force: false })
+    return true
+  } catch (error) {
+    logger.error(
+      { chatId, error: error instanceof Error ? error.message : String(error) },
+      'Failed to delete chat session',
+    )
+    return false
   }
 }
 

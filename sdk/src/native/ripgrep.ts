@@ -120,7 +120,7 @@ export function getBundledRgPath(
   const distVendorPath = join(
     process.cwd(),
     'node_modules',
-    '@codebuff',
+    '@openbuff',
     'sdk',
     'dist',
     'vendor',

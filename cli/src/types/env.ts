@@ -10,12 +10,27 @@
 import type {
   BaseEnv,
   ClientEnv,
-} from '@codebuff/common/types/contracts/env'
+} from '@khiwniti/common/types/contracts/env'
 
 /**
  * CLI-specific env vars for terminal/IDE detection and editor preferences.
  */
 export type CliEnv = BaseEnv & {
+  // Terminal detection (for tmux/screen passthrough)
+  TERM?: string
+  TMUX?: string
+  STY?: string
+
+  // SSH/remote session detection
+  SSH_CLIENT?: string
+  SSH_TTY?: string
+  SSH_CONNECTION?: string
+  CODESPACES?: string
+
+  // Display server detection (Linux headless check)
+  DISPLAY?: string
+  WAYLAND_DISPLAY?: string
+
   // Terminal-specific
   KITTY_WINDOW_ID?: string
   SIXEL_SUPPORT?: string
@@ -59,6 +74,10 @@ export type CliEnv = BaseEnv & {
   CODEBUFF_RG_PATH?: string
   CODEBUFF_SCROLL_MULTIPLIER?: string
   CODEBUFF_PERF_TEST?: string
+  CODEBUFF_TRACE?: string
+  // Toggle for mirroring CLI logs to the server's /api/logs sink (Axiom).
+  CODEBUFF_SHIP_LOGS?: string
+  FREEBUFF_MODE?: string
 }
 
 /**

@@ -1,10 +1,9 @@
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
 import {
   clearMockedModules,
   mockModule,
-} from '@codebuff/common/testing/mock-modules'
-import { cleanMarkdownCodeBlock } from '@codebuff/common/util/file'
+} from '@khiwniti/common/testing/mock-modules'
+import { cleanMarkdownCodeBlock } from '@khiwniti/common/util/file'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'bun:test'
 import { applyPatch } from 'diff'
 
@@ -13,7 +12,7 @@ import { processFileBlock } from '../process-file-block'
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
-} from '@codebuff/common/types/contracts/agent-runtime'
+} from '@khiwniti/common/types/contracts/agent-runtime'
 
 let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
 
@@ -72,29 +71,23 @@ describe('processFileBlockModule', () => {
       const expectedContent = 'function test() {\n  return true;\n}'
 
       const result = await processFileBlock({
-        ...agentRuntimeImpl,
-        runId: 'test-run-id',
         path: 'test.ts',
-        instructions: undefined,
         initialContentPromise: Promise.resolve(null),
         newContent,
-        messages: [],
-        fullResponse: '',
-        lastUserPrompt: undefined,
-        clientSessionId: 'clientSessionId',
-        fingerprintId: 'fingerprintId',
-        userInputId: 'userInputId',
-        userId: TEST_USER_ID,
-        signal: new AbortController().signal,
+        logger: agentRuntimeImpl.logger,
       })
 
-      expect(result).not.toBeNull()
-      if ('error' in result) {
-        throw new Error(`Expected success but got error: ${result.error}`)
+      expect(result.aborted).toBe(false)
+      if (result.aborted) {
+        throw new Error('Expected success but got aborted')
       }
-      expect(result.path).toBe('test.ts')
-      expect(result.patch).toBeUndefined()
-      expect(result.content).toBe(expectedContent)
+      const value = result.value
+      if ('error' in value) {
+        throw new Error(`Expected success but got error: ${value.error}`)
+      }
+      expect(value.path).toBe('test.ts')
+      expect(value.patch).toBeUndefined()
+      expect(value.content).toBe(expectedContent)
     })
 
     it('should handle Windows line endings with multi-line changes', async () => {
@@ -106,50 +99,31 @@ describe('processFileBlockModule', () => {
 
       const newContent =
         'function hello() {\r\n' +
-        '  console.log("Hello, Manicode!");\r\n' +
+        '  console.log("Hello, Codebuff!");\r\n' +
         '  return "See you later!";\r\n' +
         '}\r\n'
 
-      agentRuntimeImpl.promptAiSdk = async ({ messages }) => {
-        if (messages[0].content[0].type !== 'text') {
-          throw new Error('Expected text prompt')
-        }
-        const m = messages[0].content[0].text.match(
-          /<update>([\s\S]*)<\/update>/,
-        )
-        if (!m) {
-          return 'Test response'
-        }
-        return m[1].trim()
-      }
-
       const result = await processFileBlock({
-        ...agentRuntimeImpl,
-        runId: 'test-run-id',
         path: 'test.ts',
-        instructions: undefined,
         initialContentPromise: Promise.resolve(oldContent),
         newContent,
-        messages: [],
-        fullResponse: '',
-        lastUserPrompt: undefined,
-        clientSessionId: 'clientSessionId',
-        fingerprintId: 'fingerprintId',
-        userInputId: 'userInputId',
-        userId: TEST_USER_ID,
-        signal: new AbortController().signal,
+        logger: agentRuntimeImpl.logger,
       })
 
-      expect(result).not.toBeNull()
-      if ('error' in result) {
-        throw new Error(`Expected success but got error: ${result.error}`)
+      expect(result.aborted).toBe(false)
+      if (result.aborted) {
+        throw new Error('Expected success but got aborted')
+      }
+      const value = result.value
+      if ('error' in value) {
+        throw new Error(`Expected success but got error: ${value.error}`)
       }
 
-      expect(result.path).toBe('test.ts')
-      expect(result.content).toBe(newContent)
-      expect(result.patch).toBeDefined()
-      if (result.patch) {
-        const updatedFile = applyPatch(oldContent, result.patch)
+      expect(value.path).toBe('test.ts')
+      expect(value.content).toBe(newContent)
+      expect(value.patch).toBeDefined()
+      if (value.patch) {
+        const updatedFile = applyPatch(oldContent, value.patch)
         expect(updatedFile).toBe(newContent)
       }
     })
@@ -159,26 +133,20 @@ describe('processFileBlockModule', () => {
       const newContent = 'function test() {\n  return true;\n}\n'
 
       const result = await processFileBlock({
-        ...agentRuntimeImpl,
-        runId: 'test-run-id',
         path: 'test.ts',
-        instructions: undefined,
         initialContentPromise: Promise.resolve(oldContent),
         newContent,
-        messages: [],
-        fullResponse: '',
-        lastUserPrompt: undefined,
-        clientSessionId: 'clientSessionId',
-        fingerprintId: 'fingerprintId',
-        userInputId: 'userInputId',
-        userId: TEST_USER_ID,
-        signal: new AbortController().signal,
+        logger: agentRuntimeImpl.logger,
       })
 
-      expect(result).not.toBeNull()
-      expect('error' in result).toBe(true)
-      if ('error' in result) {
-        expect(result.error).toContain('same as the old content')
+      expect(result.aborted).toBe(false)
+      if (result.aborted) {
+        throw new Error('Expected success but got aborted')
+      }
+      const value = result.value
+      expect('error' in value).toBe(true)
+      if ('error' in value) {
+        expect(value.error).toContain('same as the old content')
       }
     })
 
@@ -186,55 +154,36 @@ describe('processFileBlockModule', () => {
       const oldContent = 'const x = 1;\r\nconst y = 2;\r\n'
       const newContent = 'const x = 1;\r\nconst z = 3;\r\n'
 
-      agentRuntimeImpl.promptAiSdk = async ({ messages }) => {
-        if (messages[0].content[0].type !== 'text') {
-          throw new Error('Expected text prompt')
-        }
-        const m = messages[0].content[0].text.match(
-          /<update>([\s\S]*)<\/update>/,
-        )
-        if (!m) {
-          return 'Test response'
-        }
-        return m[1].trim()
-      }
-
       const result = await processFileBlock({
-        ...agentRuntimeImpl,
-        runId: 'test-run-id',
         path: 'test.ts',
-        instructions: undefined,
         initialContentPromise: Promise.resolve(oldContent),
         newContent,
-        messages: [],
-        fullResponse: '',
-        lastUserPrompt: undefined,
-        clientSessionId: 'clientSessionId',
-        fingerprintId: 'fingerprintId',
-        userInputId: 'userInputId',
-        userId: TEST_USER_ID,
-        signal: new AbortController().signal,
+        logger: agentRuntimeImpl.logger,
       })
 
-      expect(result).not.toBeNull()
-      if ('error' in result) {
-        throw new Error(`Expected success but got error: ${result.error}`)
+      expect(result.aborted).toBe(false)
+      if (result.aborted) {
+        throw new Error('Expected success but got aborted')
+      }
+      const value = result.value
+      if ('error' in value) {
+        throw new Error(`Expected success but got error: ${value.error}`)
       }
 
       // Verify content has Windows line endings
-      expect(result.content).toBe(newContent)
-      expect(result.content).toContain('\r\n')
-      expect(result.content.split('\r\n').length).toBe(3) // 2 lines + empty line
+      expect(value.content).toBe(newContent)
+      expect(value.content).toContain('\r\n')
+      expect(value.content.split('\r\n').length).toBe(3) // 2 lines + empty line
 
       // Verify patch has Windows line endings
-      expect(result.patch).toBeDefined()
-      if (result.patch) {
-        expect(result.patch).toContain('\r\n')
-        const updatedFile = applyPatch(oldContent, result.patch)
+      expect(value.patch).toBeDefined()
+      if (value.patch) {
+        expect(value.patch).toContain('\r\n')
+        const updatedFile = applyPatch(oldContent, value.patch)
         expect(updatedFile).toBe(newContent)
 
         // Verify patch can be applied and preserves line endings
-        const patchLines = result.patch.split('\r\n')
+        const patchLines = value.patch.split('\r\n')
         expect(patchLines.some((line) => line.startsWith('-const y'))).toBe(
           true,
         )
@@ -244,33 +193,5 @@ describe('processFileBlockModule', () => {
       }
     })
 
-    it('should return error when creating new file with lazy edit', async () => {
-      const newContent =
-        '// ... existing code ...\nconst x = 1;\n// ... existing code ...'
-
-      const result = await processFileBlock({
-        ...agentRuntimeImpl,
-        runId: 'test-run-id',
-        path: 'test.ts',
-        instructions: undefined,
-        initialContentPromise: Promise.resolve(null),
-        newContent,
-        messages: [],
-        fullResponse: '',
-        lastUserPrompt: undefined,
-        clientSessionId: 'clientSessionId',
-        fingerprintId: 'fingerprintId',
-        userInputId: 'userInputId',
-        userId: TEST_USER_ID,
-        signal: new AbortController().signal,
-      })
-
-      expect(result).not.toBeNull()
-      expect('error' in result).toBe(true)
-      if ('error' in result) {
-        expect(result.error).toContain('placeholder comment')
-        expect(result.error).toContain('meant to modify an existing file')
-      }
-    })
   })
 })

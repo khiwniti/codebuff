@@ -7,7 +7,7 @@ import { getStubProjectFileContext } from '../util/file'
 import type { DynamicAgentTemplate } from '../types/dynamic-agent-template'
 import type { AgentState } from '../types/session-state'
 import type { ProjectFileContext } from '../util/file'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 
 describe('Agent Validation', () => {
   let mockFileContext: ProjectFileContext
@@ -164,7 +164,7 @@ describe('Agent Validation', () => {
             instructionsPrompt: 'Test user prompt',
             stepPrompt: 'Test step prompt',
             inputSchema: {
-              prompt: {} as any, // invalid prompt schema
+              prompt: {} as Record<string, never>, // invalid prompt schema
             },
             outputMode: 'last_message',
             includeMessageHistory: true,
@@ -515,7 +515,7 @@ describe('Agent Validation', () => {
               instructionsPrompt: 'Test user prompt',
               stepPrompt: 'Test step prompt',
               inputSchema: {
-                prompt: 10 as any, // Invalid - number schema
+                prompt: 10 as unknown as Record<string, never>, // Invalid - number schema
               },
               outputMode: 'last_message',
               includeMessageHistory: true,

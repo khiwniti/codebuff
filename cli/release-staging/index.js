@@ -9,8 +9,78 @@ const path = require('path')
 const zlib = require('zlib')
 
 const tar = require('tar')
+const { createReleaseHttpClient } = require('./http')
 
 const packageName = 'codecane'
+
+/**
+ * Terminal escape sequences to reset terminal state after the child process exits.
+ * When the binary is SIGKILL'd, it can't clean up its own terminal state.
+ * The wrapper (this process) survives and must reset these modes.
+ */
+const EXIT_ALTERNATE_SCREEN_SEQUENCE = '\x1b[?1049l'
+const SAFE_TERMINAL_RESET_SEQUENCES =
+  '\x1b[?1000l' + // Disable X10 mouse mode
+  '\x1b[?1002l' + // Disable button event mouse mode
+  '\x1b[?1003l' + // Disable any-event mouse mode (all motion)
+  '\x1b[?1006l' + // Disable SGR extended mouse mode
+  '\x1b[?1004l' + // Disable focus reporting
+  '\x1b[?2004l' + // Disable bracketed paste mode
+  '\x1b[?25h' // Show cursor
+
+const FULL_TERMINAL_RESET_SEQUENCES =
+  EXIT_ALTERNATE_SCREEN_SEQUENCE + SAFE_TERMINAL_RESET_SEQUENCES
+
+function resetTerminal(options = {}) {
+  const { exitAlternateScreen = false } = options
+
+  try {
+    if (process.stdin.isTTY && process.stdin.setRawMode) {
+      process.stdin.setRawMode(false)
+    }
+  } catch {
+    // stdin may be closed
+  }
+  try {
+    if (process.stdout.isTTY) {
+      // Exiting the alternate screen is only safe after an interactive child.
+      // Plain CLI paths like --help never enter it, and ?1049l can erase output.
+      process.stdout.write(
+        exitAlternateScreen
+          ? FULL_TERMINAL_RESET_SEQUENCES
+          : SAFE_TERMINAL_RESET_SEQUENCES,
+      )
+    }
+  } catch {
+    // stdout may be closed
+  }
+}
+
+function getUnsignedExitCode(code) {
+  return code != null && code < 0 ? (code >>> 0) : code
+}
+
+function isWindowsNativeCrashCode(code) {
+  const unsignedCode = getUnsignedExitCode(code)
+  return (
+    process.platform === 'win32' &&
+    (unsignedCode === 0xC000001D ||
+      unsignedCode === 0xC0000005 ||
+      unsignedCode === 0xC0000409)
+  )
+}
+
+function shouldExitAlternateScreen(code, signal) {
+  return Boolean(signal) || isWindowsNativeCrashCode(code)
+}
+
+function isIllegalInstructionExit(code, signal) {
+  const unsignedCode = getUnsignedExitCode(code)
+  return (
+    signal === 'SIGILL' ||
+    (process.platform === 'win32' && unsignedCode === 0xC000001D)
+  )
+}
 
 function createConfig(packageName) {
   const homeDir = os.homedir()
@@ -31,6 +101,11 @@ function createConfig(packageName) {
 }
 
 const CONFIG = createConfig(packageName)
+const { getProxyUrl, httpGet } = createReleaseHttpClient({
+  env: process.env,
+  userAgent: CONFIG.userAgent,
+  requestTimeout: CONFIG.requestTimeout,
+})
 
 function getPostHogConfig() {
   const apiKey =
@@ -98,10 +173,17 @@ function trackUpdateFailed(errorMessage, version, context = {}) {
 
 const PLATFORM_TARGETS = {
   'linux-x64': `${packageName}-linux-x64.tar.gz`,
+  'linux-x64-baseline': `${packageName}-linux-x64-baseline.tar.gz`,
   'linux-arm64': `${packageName}-linux-arm64.tar.gz`,
   'darwin-x64': `${packageName}-darwin-x64.tar.gz`,
   'darwin-arm64': `${packageName}-darwin-arm64.tar.gz`,
   'win32-x64': `${packageName}-win32-x64.tar.gz`,
+  'win32-x64-baseline': `${packageName}-win32-x64-baseline.tar.gz`,
+}
+
+const BASELINE_FALLBACK_TARGETS = {
+  'linux-x64': 'linux-x64-baseline',
+  'win32-x64': 'win32-x64-baseline',
 }
 
 const term = {
@@ -120,35 +202,82 @@ const term = {
   },
 }
 
-function httpGet(url, options = {}) {
-  return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url)
-    const reqOptions = {
-      hostname: parsedUrl.hostname,
-      path: parsedUrl.pathname + parsedUrl.search,
-      headers: {
-        'User-Agent': CONFIG.userAgent,
-        ...options.headers,
-      },
+function getPlatformKey() {
+  return `${process.platform}-${process.arch}`
+}
+
+function getTargetOverride() {
+  const envNames = [
+    `${packageName.toUpperCase()}_BINARY_TARGET`,
+    'CODEBUFF_BINARY_TARGET',
+    'CLI_BINARY_TARGET',
+  ]
+
+  for (const envName of envNames) {
+    const target = process.env[envName]
+    if (target && PLATFORM_TARGETS[target]) {
+      return target
     }
+  }
 
-    const req = https.get(reqOptions, (res) => {
-      if (res.statusCode === 302 || res.statusCode === 301) {
-        return httpGet(new URL(res.headers.location, url).href, options)
-          .then(resolve)
-          .catch(reject)
-      }
-      resolve(res)
-    })
+  return null
+}
 
-    req.on('error', reject)
+function linuxCpuHasAvx2() {
+  if (process.platform !== 'linux' || process.arch !== 'x64') {
+    return true
+  }
 
-    const timeout = options.timeout || CONFIG.requestTimeout
-    req.setTimeout(timeout, () => {
-      req.destroy()
-      reject(new Error('Request timeout.'))
-    })
-  })
+  try {
+    return /\bavx2\b/i.test(fs.readFileSync('/proc/cpuinfo', 'utf8'))
+  } catch {
+    return true
+  }
+}
+
+function getDefaultTargetKey() {
+  const override = getTargetOverride()
+  if (override) {
+    return override
+  }
+
+  const platformKey = getPlatformKey()
+  if (platformKey === 'linux-x64' && !linuxCpuHasAvx2()) {
+    return 'linux-x64-baseline'
+  }
+
+  return platformKey
+}
+
+function getBaselineFallbackTargetKey() {
+  // Windows has no reliable plain-Node CPU feature check here, so we keep
+  // the fast x64 binary first and fall back after the native SIGILL code.
+  return BASELINE_FALLBACK_TARGETS[getPlatformKey()] || null
+}
+
+function isTargetAllowedForThisMachine(target) {
+  const override = getTargetOverride()
+  if (override) {
+    return target === override
+  }
+  return (
+    target === getDefaultTargetKey() ||
+    target === getBaselineFallbackTargetKey()
+  )
+}
+
+function getDownloadTargetKey() {
+  const override = getTargetOverride()
+  if (override) {
+    return override
+  }
+
+  const metadata = getCurrentMetadata()
+  if (metadata?.target && isTargetAllowedForThisMachine(metadata.target)) {
+    return metadata.target
+  }
+
+  return getDefaultTargetKey()
 }
 
 async function getLatestVersion() {
@@ -179,16 +308,31 @@ function streamToString(stream) {
 
 function getCurrentVersion() {
   try {
-    if (!fs.existsSync(CONFIG.metadataPath)) {
+    const metadata = getCurrentMetadata()
+    if (!metadata) {
       return null
     }
-    const metadata = JSON.parse(fs.readFileSync(CONFIG.metadataPath, 'utf8'))
     // Also verify the binary still exists
     if (!fs.existsSync(CONFIG.binaryPath)) {
       return null
     }
+    const metadataTarget = metadata.target || getPlatformKey()
+    if (!isTargetAllowedForThisMachine(metadataTarget)) {
+      return null
+    }
     return metadata.version || null
   } catch (error) {
+    return null
+  }
+}
+
+function getCurrentMetadata() {
+  try {
+    if (!fs.existsSync(CONFIG.metadataPath)) {
+      return null
+    }
+    return JSON.parse(fs.readFileSync(CONFIG.metadataPath, 'utf8'))
+  } catch {
     return null
   }
 }
@@ -271,13 +415,12 @@ function createProgressBar(percentage, width = 30) {
   return '[' + '█'.repeat(filled) + '░'.repeat(empty) + ']'
 }
 
-async function downloadBinary(version) {
-  const platformKey = `${process.platform}-${process.arch}`
-  const fileName = PLATFORM_TARGETS[platformKey]
+async function downloadBinary(version, targetKey = getDownloadTargetKey()) {
+  const fileName = PLATFORM_TARGETS[targetKey]
 
   if (!fileName) {
     const error = new Error(`Unsupported platform: ${process.platform} ${process.arch}`)
-    trackUpdateFailed(error.message, version, { stage: 'platform_check' })
+    trackUpdateFailed(error.message, version, { stage: 'platform_check', target: targetKey })
     throw error
   }
 
@@ -301,7 +444,7 @@ async function downloadBinary(version) {
   if (res.statusCode !== 200) {
     fs.rmSync(CONFIG.tempDownloadDir, { recursive: true })
     const error = new Error(`Download failed: HTTP ${res.statusCode}`)
-    trackUpdateFailed(error.message, version, { stage: 'http_download', statusCode: res.statusCode })
+    trackUpdateFailed(error.message, version, { stage: 'http_download', statusCode: res.statusCode, target: targetKey })
     throw error
   }
 
@@ -345,7 +488,7 @@ async function downloadBinary(version) {
     const error = new Error(
       `Binary not found after extraction. Expected: ${CONFIG.binaryName}, Available files: ${files.join(', ')}`,
     )
-    trackUpdateFailed(error.message, version, { stage: 'extraction' })
+    trackUpdateFailed(error.message, version, { stage: 'extraction', target: targetKey })
     throw error
   }
 
@@ -378,7 +521,7 @@ async function downloadBinary(version) {
     // Save version metadata for fast version checking
     fs.writeFileSync(
       CONFIG.metadataPath,
-      JSON.stringify({ version }, null, 2),
+      JSON.stringify({ version, target: targetKey }, null, 2),
     )
   } finally {
     // Clean up temp directory even if rename fails
@@ -401,6 +544,11 @@ async function ensureBinaryExists() {
   if (!version) {
     console.error('❌ Failed to determine latest version')
     console.error('Please check your internet connection and try again')
+    if (!getProxyUrl()) {
+      console.error(
+        'If you are behind a proxy, set the HTTPS_PROXY environment variable',
+      )
+    }
     process.exit(1)
   }
 
@@ -410,6 +558,11 @@ async function ensureBinaryExists() {
     term.clearLine()
     console.error('❌ Failed to download codecane:', error.message)
     console.error('Please check your internet connection and try again')
+    if (!getProxyUrl()) {
+      console.error(
+        'If you are behind a proxy, set the HTTPS_PROXY environment variable',
+      )
+    }
     process.exit(1)
   }
 }
@@ -429,36 +582,157 @@ async function checkForUpdates(runningProcess, exitListener) {
       term.clearLine()
 
       runningProcess.removeListener('exit', exitListener)
-      runningProcess.kill('SIGTERM')
 
       await new Promise((resolve) => {
-        runningProcess.on('exit', resolve)
-        setTimeout(() => {
-          if (!runningProcess.killed) {
-            runningProcess.kill('SIGKILL')
-          }
+        let exited = false
+        runningProcess.once('exit', () => {
+          exited = true
           resolve()
+        })
+        runningProcess.kill('SIGTERM')
+        setTimeout(() => {
+          if (!exited) {
+            runningProcess.kill('SIGKILL')
+            // Safety: resolve after giving SIGKILL time to take effect
+            setTimeout(() => resolve(), 1000)
+          }
         }, 5000)
       })
 
+      resetTerminal({ exitAlternateScreen: true })
       console.log(`Update available: ${currentVersion} → ${latestVersion}`)
 
       await downloadBinary(latestVersion)
-
-      const newChild = spawn(CONFIG.binaryPath, process.argv.slice(2), {
-        stdio: 'inherit',
-        detached: false,
-      })
-
-      newChild.on('exit', (code) => {
-        process.exit(code || 0)
-      })
+      const newChild = spawnInstalledBinary({ detached: false })
+      attachExitHandler(newChild)
 
       return new Promise(() => {})
     }
   } catch (error) {
     // Ignore update failures
   }
+}
+
+function printCrashDiagnostics(code, signal) {
+  // Windows NTSTATUS codes (unsigned DWORD)
+  const unsignedCode = getUnsignedExitCode(code)
+  const isIllegalInstruction = isIllegalInstructionExit(code, signal)
+  const isAccessViolation =
+    signal === 'SIGSEGV' ||
+    (process.platform === 'win32' && unsignedCode === 0xC0000005)
+  const isBusError = signal === 'SIGBUS'
+  const isAbort =
+    signal === 'SIGABRT' ||
+    (process.platform === 'win32' && unsignedCode === 0xC0000409)
+
+  if (!isIllegalInstruction && !isAccessViolation && !isBusError && !isAbort) return
+
+  const exitInfo = signal ? `signal ${signal}` : `code ${code}`
+  console.error('')
+  console.error(`❌ ${packageName} exited immediately (${exitInfo})`)
+  console.error('')
+
+  if (isIllegalInstruction) {
+    console.error('Your CPU may not support the required instruction set (AVX2).')
+    console.error('This typically affects CPUs from before 2013.')
+    console.error('Unfortunately, this binary is not compatible with your system.')
+    console.error('')
+  } else if (isAccessViolation) {
+    console.error('The binary crashed with an access violation.')
+    console.error('')
+  } else if (isBusError) {
+    console.error('The binary crashed with a bus error.')
+    console.error('This may indicate a platform compatibility issue.')
+    console.error('')
+  } else if (isAbort) {
+    console.error('The binary crashed with an abort signal.')
+    console.error('')
+  }
+
+  console.error('System info:')
+  console.error(`  Platform: ${process.platform} ${process.arch}`)
+  console.error(`  Node:     ${process.version}`)
+  console.error(`  Binary:   ${CONFIG.binaryPath}`)
+  console.error('')
+  console.error('Please report this issue at:')
+  console.error('  https://github.com/CodebuffAI/codebuff/issues')
+  console.error('')
+}
+
+function spawnInstalledBinary(options = {}) {
+  const child = spawn(CONFIG.binaryPath, process.argv.slice(2), {
+    stdio: 'inherit',
+    ...options,
+  })
+
+  child.on('error', (err) => {
+    console.error(`Failed to start ${packageName}:`, err.message)
+    process.exit(1)
+  })
+
+  return child
+}
+
+async function tryFallbackToBaseline(code, signal) {
+  if (!isIllegalInstructionExit(code, signal)) {
+    return false
+  }
+
+  const fallbackTarget = getBaselineFallbackTargetKey()
+  if (!fallbackTarget) {
+    return false
+  }
+
+  const metadata = getCurrentMetadata()
+  const currentTarget = metadata?.target || getDefaultTargetKey()
+  if (currentTarget === fallbackTarget) {
+    return false
+  }
+
+  const version = metadata?.version || (await getLatestVersion())
+  if (!version) {
+    return false
+  }
+
+  resetTerminal({
+    exitAlternateScreen: shouldExitAlternateScreen(code, signal),
+  })
+  console.error('')
+  console.error(
+    `${packageName} is switching to the older-CPU binary for this machine.`,
+  )
+
+  try {
+    await downloadBinary(version, fallbackTarget)
+  } catch (error) {
+    term.clearLine()
+    console.error(`Failed to download ${fallbackTarget}: ${error.message}`)
+    return false
+  }
+
+  const child = spawnInstalledBinary({ detached: false })
+  attachExitHandler(child, false)
+  return true
+}
+
+function attachExitHandler(child, allowBaselineFallback = true) {
+  const exitListener = async (code, signal) => {
+    if (
+      allowBaselineFallback &&
+      (await tryFallbackToBaseline(code, signal))
+    ) {
+      return
+    }
+
+    resetTerminal({
+      exitAlternateScreen: shouldExitAlternateScreen(code, signal),
+    })
+    printCrashDiagnostics(code, signal)
+    process.exit(signal ? 1 : (code || 0))
+  }
+
+  child.on('exit', exitListener)
+  return exitListener
 }
 
 async function main() {
@@ -472,15 +746,8 @@ async function main() {
 
   await ensureBinaryExists()
 
-  const child = spawn(CONFIG.binaryPath, process.argv.slice(2), {
-    stdio: 'inherit',
-  })
-
-  const exitListener = (code) => {
-    process.exit(code || 0)
-  }
-
-  child.on('exit', exitListener)
+  const child = spawnInstalledBinary()
+  const exitListener = attachExitHandler(child)
 
   setTimeout(() => {
     checkForUpdates(child, exitListener)

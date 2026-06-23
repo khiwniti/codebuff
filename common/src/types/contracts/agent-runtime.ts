@@ -1,6 +1,5 @@
 import type { TrackEventFn } from './analytics'
 import type { ConsumeCreditsWithFallbackFn } from './billing'
-import type { ClientEnv, CiEnv } from './env'
 import type {
   HandleStepsLogChunkFn,
   RequestFilesFn,
@@ -18,12 +17,14 @@ import type {
   GetUserInfoFromApiKeyFn,
   StartAgentRunFn,
 } from './database'
+import type { ClientEnv, CiEnv } from './env'
 import type {
   PromptAiSdkFn,
   PromptAiSdkStreamFn,
   PromptAiSdkStructuredFn,
 } from './llm'
 import type { Logger } from './logger'
+import type { TraceWriter } from './trace'
 
 /** Shared dependencies */
 export type AgentRuntimeDeps = {
@@ -54,6 +55,8 @@ export type AgentRuntimeDeps = {
 
   // Other
   logger: Logger
+  /** Optional debug trace of agent message histories (see TraceWriter) */
+  traceWriter?: TraceWriter
   fetch: typeof globalThis.fetch
 }
 

@@ -1,4 +1,4 @@
-import { createTestBaseEnv } from '@codebuff/common/testing-env-process'
+import { createTestBaseEnv } from '@khiwniti/common/testing-env-process'
 
 import type { CliEnv } from '../types/env'
 
@@ -9,6 +9,9 @@ export const createTestCliEnv = (overrides: Partial<CliEnv> = {}): CliEnv => ({
   ...createTestBaseEnv(),
 
   // CLI-specific defaults
+  SSH_CLIENT: undefined,
+  SSH_TTY: undefined,
+  SSH_CONNECTION: undefined,
   KITTY_WINDOW_ID: undefined,
   SIXEL_SUPPORT: undefined,
   ZED_NODE_ENV: undefined,
@@ -38,5 +41,6 @@ export const createTestCliEnv = (overrides: Partial<CliEnv> = {}): CliEnv => ({
   CODEBUFF_CLI_TARGET: undefined,
   CODEBUFF_RG_PATH: undefined,
   CODEBUFF_SCROLL_MULTIPLIER: undefined,
+  FREEBUFF_MODE: undefined,
   ...overrides,
 })

@@ -13,21 +13,28 @@ import {
 } from '../messages'
 
 import type { Message } from '../../types/messages/codebuff-message'
-import type { AssistantModelMessage, ToolResultPart } from 'ai'
+import type { ToolResultPart } from 'ai'
+
+// Test helper types for provider options with cache control
+type CacheControlValue = { type: string }
+type ProviderWithCacheControl = Record<string, unknown> & {
+  cache_control?: CacheControlValue
+}
 
 describe('withCacheControl', () => {
   it('should add cache control to object without providerOptions', () => {
-    const obj: { providerOptions?: any } = {}
+    const obj = {} as Parameters<typeof withCacheControl>[0]
     const result = withCacheControl(obj)
 
     expect(result.providerOptions).toBeDefined()
-    expect(result.providerOptions?.anthropic?.cache_control).toEqual({
+    const resultOptions = result.providerOptions as Record<string, ProviderWithCacheControl>
+    expect(resultOptions.anthropic?.cache_control).toEqual({
       type: 'ephemeral',
     })
-    expect(result.providerOptions?.openrouter?.cache_control).toEqual({
+    expect(resultOptions.openrouter?.cache_control).toEqual({
       type: 'ephemeral',
     })
-    expect(result.providerOptions?.openaiCompatible?.cache_control).toEqual({
+    expect(resultOptions.openaiCompatible?.cache_control).toEqual({
       type: 'ephemeral',
     })
   })
@@ -35,21 +42,22 @@ describe('withCacheControl', () => {
   it('should add cache control to existing providerOptions', () => {
     const obj = {
       providerOptions: {
-        anthropic: { someOtherOption: 'value' } as any,
+        anthropic: { someOtherOption: 'value' },
       },
-    }
+    } as Parameters<typeof withCacheControl>[0]
     const result = withCacheControl(obj)
 
-    expect((result.providerOptions?.anthropic as any)?.cache_control).toEqual({
+    const resultAnthropicOptions = result.providerOptions?.anthropic as ProviderWithCacheControl
+    expect(resultAnthropicOptions.cache_control).toEqual({
       type: 'ephemeral',
     })
-    expect((result.providerOptions?.anthropic as any)?.someOtherOption).toBe(
+    expect(resultAnthropicOptions.someOtherOption).toBe(
       'value',
     )
   })
 
   it('should not mutate original object', () => {
-    const original: { providerOptions?: any } = {}
+    const original = {} as Parameters<typeof withCacheControl>[0]
     const result = withCacheControl(original)
 
     expect(original.providerOptions).toBeUndefined()
@@ -57,18 +65,13 @@ describe('withCacheControl', () => {
   })
 
   it('should handle all three providers', () => {
-    const obj: { providerOptions?: any } = {}
+    const obj = {} as Parameters<typeof withCacheControl>[0]
     const result = withCacheControl(obj)
 
-    expect(
-      (result.providerOptions?.anthropic as any)?.cache_control?.type,
-    ).toBe('ephemeral')
-    expect(
-      (result.providerOptions?.openrouter as any)?.cache_control?.type,
-    ).toBe('ephemeral')
-    expect(
-      (result.providerOptions?.openaiCompatible as any)?.cache_control?.type,
-    ).toBe('ephemeral')
+    const resultOptions = result.providerOptions as Record<string, ProviderWithCacheControl>
+    expect(resultOptions.anthropic?.cache_control?.type).toBe('ephemeral')
+    expect(resultOptions.openrouter?.cache_control?.type).toBe('ephemeral')
+    expect(resultOptions.openaiCompatible?.cache_control?.type).toBe('ephemeral')
   })
 })
 
@@ -117,7 +120,7 @@ describe('withoutCacheControl', () => {
   })
 
   it('should handle object with no cache control', () => {
-    const obj: { providerOptions?: any } = {}
+    const obj = {} as Parameters<typeof withoutCacheControl>[0]
     const result = withoutCacheControl(obj)
 
     expect(result.providerOptions).toBeUndefined()
@@ -188,6 +191,68 @@ describe('convertCbToModelMessages', () => {
     })
   })
 
+  describe('lone surrogate sanitization', () => {
+    // A lone (unpaired) UTF-16 surrogate — e.g. produced by slicing a file read
+    // in the middle of an emoji — serializes to a syntactically-valid \uXXXX
+    // escape that JS JSON.parse accepts but strict server-side parsers
+    // (serde_json) reject with "unexpected end of hex escape", fatally aborting
+    // the agent on every subsequent request. The converter must neutralize it.
+    const LONE_HIGH = '\uD83D' // high surrogate of 😀 with the low half dropped
+    const REPLACEMENT = '�'
+
+    const assertWellFormed = (value: unknown): void => {
+      const json = JSON.stringify(value)
+      // matchAll over lone surrogates: there should be none left.
+      const lone = json.match(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+      )
+      expect(lone).toBeNull()
+    }
+
+    it('sanitizes a lone surrogate in a user text part', () => {
+      const result = convertCbToModelMessages({
+        messages: [userMessage(`hello ${LONE_HIGH} world`)],
+        includeCacheControl: false,
+      })
+      assertWellFormed(result)
+      expect(JSON.stringify(result)).toContain(`hello ${REPLACEMENT} world`)
+    })
+
+    it('sanitizes a lone surrogate nested in a tool result value', () => {
+      const result = convertCbToModelMessages({
+        messages: [
+          {
+            role: 'tool',
+            toolName: 'read_files',
+            toolCallId: 'call_1',
+            content: jsonToolResult([
+              { path: 'big.ts', content: `truncated${LONE_HIGH}` },
+            ]),
+          },
+        ],
+        includeCacheControl: false,
+      })
+      assertWellFormed(result)
+    })
+
+    it('sanitizes a lone surrogate in a system message string', () => {
+      const result = convertCbToModelMessages({
+        messages: [systemMessage(`prompt ${LONE_HIGH}`)],
+        includeCacheControl: false,
+      })
+      assertWellFormed(result)
+    })
+
+    it('leaves valid surrogate pairs (emoji) intact', () => {
+      const result = convertCbToModelMessages({
+        messages: [userMessage('keep the 😀 emoji')],
+        includeCacheControl: false,
+      })
+      assertWellFormed(result)
+      expect(JSON.stringify(result)).toContain('keep the 😀 emoji')
+    })
+  })
+
   describe('tool message conversion', () => {
     it('should convert tool messages with JSON output', () => {
       const messages: Message[] = [
@@ -244,6 +309,38 @@ describe('convertCbToModelMessages', () => {
             expect.objectContaining({
               type: 'file',
             }),
+          ],
+        }),
+      ])
+    })
+
+    it('should convert tool messages with empty content', () => {
+      const messages: Message[] = [
+        {
+          role: 'tool',
+          toolName: 'scraper_page_to_markdown',
+          toolCallId: 'call_empty',
+          content: [],
+        },
+      ]
+
+      const result = convertCbToModelMessages({
+        messages,
+        includeCacheControl: false,
+      })
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          role: 'tool',
+          toolCallId: 'call_empty',
+          toolName: 'scraper_page_to_markdown',
+          content: [
+            expect.objectContaining({
+              type: 'tool-result',
+              toolCallId: 'call_empty',
+              toolName: 'scraper_page_to_markdown',
+              output: { type: 'json', value: '' },
+            } satisfies ToolResultPart),
           ],
         }),
       ])
@@ -482,9 +579,9 @@ describe('convertCbToModelMessages', () => {
         typeof result[2].content !== 'string' &&
         result[2].content.length > 0
       ) {
-        const lastContentPart = result[2].content[result[2].content.length - 1]
+        const lastContentPart = result[2].content[result[2].content.length - 1] as { providerOptions?: Record<string, ProviderWithCacheControl> }
         expect(
-          (lastContentPart as any).providerOptions?.anthropic?.cache_control,
+          lastContentPart.providerOptions?.anthropic?.cache_control,
         ).toEqual({
           type: 'ephemeral',
         })
@@ -843,9 +940,10 @@ describe('convertCbToModelMessages', () => {
         includeCacheControl: false,
       })
 
-      expect((result[0] as any).tags).toEqual(['custom_tag'])
-      expect((result[0] as any).timeToLive).toBe('agentStep')
-      expect((result[0].providerOptions?.anthropic as any)?.someOption).toBe(
+      const resultMessage = result[0] as { tags?: string[]; timeToLive?: string; providerOptions?: Record<string, ProviderWithCacheControl> }
+      expect(resultMessage.tags).toEqual(['custom_tag'])
+      expect(resultMessage.timeToLive).toBe('agentStep')
+      expect((resultMessage.providerOptions?.anthropic as ProviderWithCacheControl)?.someOption).toBe(
         'value',
       )
     })

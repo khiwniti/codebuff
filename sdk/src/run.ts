@@ -1,57 +1,66 @@
 import path from 'path'
 
-import { callMainPrompt } from '@codebuff/agent-runtime/main-prompt'
+import { callMainPrompt } from '@khiwniti/agent-runtime/main-prompt'
 import {
   buildUserMessageContent,
-  getCancelledAdditionalMessages,
-} from '@codebuff/agent-runtime/util/messages'
-import { MAX_AGENT_STEPS_DEFAULT } from '@codebuff/common/constants/agents'
-import { getMCPClient, listMCPTools, callMCPTool } from '@codebuff/common/mcp/client'
-import { toOptionalFile } from '@codebuff/common/constants/paths'
-import { toolNames } from '@codebuff/common/tools/constants'
-import { clientToolCallSchema } from '@codebuff/common/tools/list'
-import { AgentOutputSchema } from '@codebuff/common/types/session-state'
+  withSystemTags,
+} from '@khiwniti/agent-runtime/util/messages'
+import { MAX_AGENT_STEPS_DEFAULT } from '@khiwniti/common/constants/agents'
+import { toOptionalFile } from '@khiwniti/common/constants/paths'
+import {
+  getMCPClient,
+  listMCPTools,
+  callMCPTool,
+} from '@khiwniti/common/mcp/client'
+import {
+  COMPOSIO_META_TOOL_NAMES,
+  isComposioMetaToolName,
+} from '@khiwniti/common/constants/composio'
+import { toolNames } from '@khiwniti/common/tools/constants'
+import { clientToolCallSchema } from '@khiwniti/common/tools/list'
+import { AgentOutputSchema } from '@khiwniti/common/types/session-state'
+import {
+  FETCH_IDLE_TIMEOUT_USER_MESSAGE,
+  extractApiErrorDetails,
+  isFetchIdleTimeoutError,
+} from '@khiwniti/common/util/error'
 import { cloneDeep } from 'lodash'
 
+import { executeComposioToolViaServer } from './composio'
 import { getErrorStatusCode } from './error-utils'
 import { getAgentRuntimeImpl } from './impl/agent-runtime'
 import { getUserInfoFromApiKey } from './impl/database'
 import { initialSessionState, applyOverridesToSessionState } from './run-state'
 import { changeFile } from './tools/change-file'
+import { applyPatchTool } from './tools/apply-patch'
 import { codeSearch } from './tools/code-search'
 import { glob } from './tools/glob'
 import { listDirectory } from './tools/list-directory'
+import { getProjectPathLookupKeys } from './tools/path-utils'
 import { getFiles } from './tools/read-files'
+import { readUrl } from './tools/read-url'
 import { runTerminalCommand } from './tools/run-terminal-command'
-
-import type { FileFilter } from './tools/read-files'
 
 import type { CustomToolDefinition } from './custom-tool'
 import type { RunState } from './run-state'
-import type { ServerAction } from '@codebuff/common/actions'
-import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
-import type {
-  PublishedToolName,
-  ToolName,
-} from '@codebuff/common/tools/constants'
-import type {
-  ClientToolCall,
-  ClientToolName,
-  CodebuffToolOutput,
-  PublishedClientToolName,
-} from '@codebuff/common/tools/list'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
-import type { ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
+import type { FileFilter } from './tools/read-files'
+import type { ServerAction } from '@khiwniti/common/actions'
+import type { AgentDefinition } from '@khiwniti/common/templates/initial-agents-dir/types/agent-definition'
+import type { ToolName } from '@khiwniti/common/tools/constants'
+import type { PublishedClientToolName } from '@khiwniti/common/tools/list'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { TraceWriter } from '@khiwniti/common/types/contracts/trace'
+import type { CodebuffFileSystem } from '@khiwniti/common/types/filesystem'
+import type { ToolMessage } from '@khiwniti/common/types/messages/codebuff-message'
 import type {
   ImagePart,
   TextPart,
   ToolResultOutput,
-} from '@codebuff/common/types/messages/content-part'
-import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
-import type { SessionState } from '@codebuff/common/types/session-state'
-import type { Source } from '@codebuff/common/types/source'
-import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+} from '@khiwniti/common/types/messages/content-part'
+import type { PrintModeEvent } from '@khiwniti/common/types/print-mode'
+import type { SessionState } from '@khiwniti/common/types/session-state'
+import type { Source } from '@khiwniti/common/types/source'
+import type { CodebuffSpawn } from '@khiwniti/common/types/spawn'
 
 /**
  * Wraps content for user messages, ensuring text is wrapped in <user_message> tags.
@@ -67,10 +76,32 @@ const wrapContentForUserMessage = (
   return buildUserMessageContent(undefined, undefined, content)
 }
 
+type OverrideToolHandlers = {
+  [K in PublishedClientToolName]?: (input: any) => Promise<ToolResultOutput[]>
+} & {
+  // Include read_files separately, since it has a different signature.
+  read_files?: (input: {
+    filePaths: string[]
+  }) => Promise<Record<string, string | null>>
+}
+
+function isRunPauseError(error: unknown) {
+  return (
+    !!error &&
+    typeof error === 'object' &&
+    (('codebuffRunPaused' in error &&
+      (error as { codebuffRunPaused?: unknown }).codebuffRunPaused === true) ||
+      ('name' in error &&
+        (error as { name?: unknown }).name === 'CodebuffRunPausedError'))
+  )
+}
+
 export type CodebuffClientOptions = {
   apiKey?: string
 
   cwd?: string
+  /** Optional directory path to load skills from. Skills found here will be available to the `skill` tool. */
+  skillsDir?: string
   projectFiles?: Record<string, string>
   knowledgeFiles?: Record<string, string>
   agentDefinitions?: AgentDefinition[]
@@ -98,23 +129,16 @@ export type CodebuffClientOptions = {
   /** Optional filter to classify files before reading (runs before gitignore check) */
   fileFilter?: FileFilter
 
-  overrideTools?: Partial<
-    {
-      [K in ClientToolName & PublishedToolName]: (
-        input: ClientToolCall<K>['input'],
-      ) => Promise<CodebuffToolOutput<K>>
-    } & {
-      // Include read_files separately, since it has a different signature.
-      read_files: (input: {
-        filePaths: string[]
-      }) => Promise<Record<string, string | null>>
-    }
-  >
+  overrideTools?: OverrideToolHandlers
   customToolDefinitions?: CustomToolDefinition[]
 
   fsSource?: Source<CodebuffFileSystem>
   spawnSource?: Source<CodebuffSpawn>
   logger?: Logger
+  /** Optional debug trace of agent message histories. Called with the full
+   *  history at each agent step boundary; implementations should append each
+   *  message once (see TraceWriter). */
+  traceWriter?: TraceWriter
 }
 
 export type ImageContent = {
@@ -139,6 +163,11 @@ export type RunOptions = {
   previousRun?: RunState
   extraToolResults?: ToolMessage[]
   signal?: AbortSignal
+  costMode?: string
+  /** Extra key/values merged into each LLM request's `codebuff_metadata`.
+   *  Used by hosts (e.g. the CLI) to forward client-scoped identifiers like
+   *  `freebuff_instance_id` that server-side gates read from the request body. */
+  extraCodebuffMetadata?: Record<string, string>
 }
 
 const createAbortError = (signal?: AbortSignal) => {
@@ -164,6 +193,8 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
     const abortError = createAbortError(signal)
     return {
       sessionState: options.previousRun?.sessionState,
+      traceSessionId:
+        options.previousRun?.traceSessionId ?? crypto.randomUUID(),
       output: {
         type: 'error',
         message: abortError.message,
@@ -179,6 +210,7 @@ async function runOnce({
   fingerprintId,
 
   cwd,
+  skillsDir,
   projectFiles,
   knowledgeFiles,
   agentDefinitions,
@@ -195,6 +227,7 @@ async function runOnce({
   fsSource = () => require('fs').promises,
   spawnSource,
   logger,
+  traceWriter,
 
   agent,
   prompt,
@@ -203,6 +236,8 @@ async function runOnce({
   previousRun,
   extraToolResults,
   signal,
+  costMode,
+  extraCodebuffMetadata,
 }: RunExecutionOptions): Promise<RunState> {
   const fsSourceValue = typeof fsSource === 'function' ? fsSource() : fsSource
   const fs = await fsSourceValue
@@ -214,11 +249,13 @@ async function runOnce({
     spawn = require('child_process').spawn as CodebuffSpawn
   }
   const preparedContent = wrapContentForUserMessage(content)
+  let activeCustomToolDefinitions = customToolDefinitions ?? []
 
   // Init session state
   let agentId
   if (typeof agent !== 'string') {
-    agentDefinitions = [...(cloneDeep(agentDefinitions) ?? []), agent]
+    const clonedDefs = agentDefinitions ? cloneDeep(agentDefinitions) : []
+    agentDefinitions = [...clonedDefs, agent]
     agentId = agent.id
   } else {
     agentId = agent
@@ -241,6 +278,7 @@ async function runOnce({
     // No previous run, so create a fresh session state
     sessionState = await initialSessionState({
       cwd,
+      skillsDir,
       knowledgeFiles,
       agentDefinitions,
       customToolDefinitions,
@@ -251,12 +289,17 @@ async function runOnce({
       logger,
     })
   }
+  const traceSessionId = previousRun?.traceSessionId ?? crypto.randomUUID()
+
+  for (const toolName of COMPOSIO_META_TOOL_NAMES) {
+    delete sessionState.fileContext.customToolDefinitions[toolName]
+  }
 
   let resolve: (value: RunReturnType) => any = () => {}
-  let reject: (error: any) => any = () => {}
+  let _reject: (error: any) => any = () => {}
   const promise = new Promise<RunReturnType>((res, rej) => {
     resolve = res
-    reject = rej
+    _reject = rej
   })
 
   async function onError(error: { message: string }) {
@@ -265,28 +308,46 @@ async function runOnce({
     }
   }
 
-  let pendingAgentResponse = ''
+  // The agent runtime mutates sessionState.mainAgentState as it progresses,
+  // replacing messageHistory with a new array once it adds the user prompt.
+  // Comparing array identity detects progress more robustly than length:
+  // context pruning could shrink history below its starting length without
+  // meaning the runtime never ran.
+  let initialMessageHistory = sessionState.mainAgentState.messageHistory
+
   /** Calculates the current session state if cancelled.
    *
-   * This includes the user's message and pending assistant message.
+   * This is used when callMainPrompt throws an error. If the agent runtime made
+   * any progress (replaced the shared messageHistory), those messages are
+   * preserved. Otherwise the user's message is added so it isn't lost.
    */
   function getCancelledSessionState(message: string): SessionState {
+    const runtimeMadeProgress =
+      sessionState.mainAgentState.messageHistory !== initialMessageHistory
+
     const state = cloneDeep(sessionState)
-    state.mainAgentState.messageHistory.push(
-      ...getCancelledAdditionalMessages({
-        prompt,
-        params,
-        content: preparedContent,
-        pendingAgentResponse,
-        systemMessage: message,
-      }),
-    )
+
+    // Only add the user's message if the runtime didn't get a chance to add it.
+    if (!runtimeMadeProgress && (prompt || preparedContent)) {
+      state.mainAgentState.messageHistory.push({
+        role: 'user' as const,
+        content: buildUserMessageContent(prompt, params, preparedContent),
+        tags: ['USER_PROMPT'] as string[],
+      })
+    }
+
+    // Add error context message
+    state.mainAgentState.messageHistory.push({
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text: withSystemTags(message) }],
+    })
     return state
   }
   function getCancelledRunState(message?: string): RunState {
     message = message ?? 'Run cancelled by user.'
     return {
       sessionState: getCancelledSessionState(message),
+      traceSessionId,
       output: {
         type: 'error',
         message,
@@ -301,21 +362,16 @@ async function runOnce({
       return
     }
     const { chunk } = action
-    addToPendingAssistantMessage: if (typeof chunk === 'string') {
-      pendingAgentResponse += chunk
-    } else if (
-      chunk.type === 'reasoning_delta' &&
-      chunk.ancestorRunIds.length === 0
-    ) {
-      pendingAgentResponse += chunk.text
-    }
 
     if (typeof chunk !== 'string') {
       if (chunk.type === 'reasoning_delta') {
         handleStreamChunk?.({
           type: 'reasoning_chunk',
           chunk: chunk.text,
-          agentId: chunk.runId,
+          // The agent's stable id (matches subagent_start/subagent_chunk), so
+          // subagent reasoning attributes to the right agent. (Previously this
+          // forwarded runId, which no consumer's agent map is keyed by.)
+          agentId: chunk.agentId,
           ancestorRunIds: chunk.ancestorRunIds,
         })
       } else {
@@ -348,6 +404,7 @@ async function runOnce({
 
   const agentRuntimeImpl = getAgentRuntimeImpl({
     logger,
+    traceWriter,
     apiKey,
     handleStepsLogChunk: () => {
       // Does nothing for now
@@ -364,14 +421,15 @@ async function runOnce({
           mcpConfig,
         },
         overrides: overrideTools ?? {},
-        customToolDefinitions: customToolDefinitions
+        customToolDefinitions: activeCustomToolDefinitions
           ? Object.fromEntries(
-              customToolDefinitions.map((def) => [def.toolName, def]),
+              activeCustomToolDefinitions.map((def) => [def.toolName, def]),
             )
           : {},
         cwd,
         fs,
         env,
+        apiKey,
       })
     },
     requestMcpToolData: async ({ mcpConfig, toolNames }) => {
@@ -384,7 +442,7 @@ async function runOnce({
           filteredTools.push(tool)
           continue
         }
-        if (tool.name in toolNames) {
+        if (toolNames.includes(tool.name)) {
           filteredTools.push(tool)
           continue
         }
@@ -408,7 +466,11 @@ async function runOnce({
         cwd,
         fs,
       })
-      return toOptionalFile(files[filePath] ?? null)
+      const lookupKeys = cwd
+        ? getProjectPathLookupKeys(cwd, filePath)
+        : [filePath]
+      const fileKey = lookupKeys.find((key) => key in files)
+      return toOptionalFile(fileKey === undefined ? null : files[fileKey]!)
     },
     sendAction: ({ action }) => {
       if (action.type === 'action-error') {
@@ -429,6 +491,7 @@ async function runOnce({
           resolve,
           onError,
           initialSessionState: sessionState,
+          traceSessionId,
         })
         return
       }
@@ -438,6 +501,7 @@ async function runOnce({
           resolve,
           onError,
           initialSessionState: sessionState,
+          traceSessionId,
         })
         return
       }
@@ -473,14 +537,10 @@ async function runOnce({
   if (!userInfo) {
     return getCancelledRunState('Invalid API key or user not found')
   }
-
   const userId = userInfo.id
 
-  signal?.addEventListener('abort', () => {
-    resolve(getCancelledRunState())
-  })
   if (signal?.aborted) {
-    return getCancelledRunState()
+    return getCancelledRunState('Run cancelled by user.')
   }
 
   callMainPrompt({
@@ -493,7 +553,7 @@ async function runOnce({
       promptParams: params,
       content: preparedContent,
       fingerprintId: fingerprintId,
-      costMode: 'normal',
+      costMode: costMode ?? 'normal',
       sessionState,
       toolResults: extraToolResults ?? [],
       agentId,
@@ -502,17 +562,41 @@ async function runOnce({
     repoId: undefined,
     clientSessionId: promptId,
     userId,
+    extraCodebuffMetadata: {
+      ...(extraCodebuffMetadata ?? {}),
+      trace_session_id: traceSessionId,
+    },
     signal: signal ?? new AbortController().signal,
   }).catch((error) => {
-    const errorMessage =
-      error instanceof Error ? error.message : String(error ?? '')
-    const statusCode = getErrorStatusCode(error)
+    let errorMessage = isFetchIdleTimeoutError(error)
+      ? FETCH_IDLE_TIMEOUT_USER_MESSAGE
+      : error instanceof Error
+        ? error.message
+        : String(error ?? '')
+    const apiErrorDetails = extractApiErrorDetails(error)
+    const statusCode = apiErrorDetails.statusCode ?? getErrorStatusCode(error)
+    const {
+      countryBlockReason,
+      countryCode,
+      errorCode,
+      ipPrivacySignals,
+      message: parsedMessage,
+    } = apiErrorDetails
+    if (parsedMessage) {
+      errorMessage = parsedMessage
+    }
+
     resolve({
       sessionState: getCancelledSessionState(errorMessage),
+      traceSessionId,
       output: {
         type: 'error',
         message: errorMessage,
         ...(statusCode !== undefined && { statusCode }),
+        ...(errorCode !== undefined && { error: errorCode }),
+        ...(countryCode !== undefined && { countryCode }),
+        ...(countryBlockReason !== undefined && { countryBlockReason }),
+        ...(ipPrivacySignals !== undefined && { ipPrivacySignals }),
       },
     })
   })
@@ -547,7 +631,12 @@ async function readFiles({
   if (override) {
     return await override({ filePaths })
   }
-  return getFiles({ filePaths, cwd: requireCwd(cwd, 'read_files'), fs, fileFilter })
+  return getFiles({
+    filePaths,
+    cwd: requireCwd(cwd, 'read_files'),
+    fs,
+    fileFilter,
+  })
 }
 
 async function handleToolCall({
@@ -557,6 +646,7 @@ async function handleToolCall({
   cwd,
   fs,
   env,
+  apiKey,
 }: {
   action: ServerAction<'tool-call-request'>
   overrides: NonNullable<CodebuffClientOptions['overrideTools']>
@@ -564,6 +654,7 @@ async function handleToolCall({
   cwd?: string
   fs: CodebuffFileSystem
   env?: Record<string, string>
+  apiKey: string
 }): Promise<{ output: ToolResultOutput[] }> {
   const toolName = action.toolName
   const input = action.input
@@ -610,16 +701,29 @@ async function handleToolCall({
 
   try {
     let override = overrides[toolName as PublishedClientToolName]
-    if (!override && toolName === 'str_replace') {
-      // Note: write_file and str_replace have the same implementation, so reuse their write_file override.
+    if (
+      !override &&
+      (toolName === 'str_replace' || toolName === 'apply_patch')
+    ) {
+      // Reuse the write_file override for file editing tools.
       override = overrides['write_file']
     }
     if (override) {
+      // Note: This type assertion is necessary because TypeScript cannot narrow
+      // the union type of all possible tool inputs based on the dynamic toolName.
+      // The input has been validated by clientToolCallSchema.parse above.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       result = await override(input as any)
     } else if (toolName === 'end_turn') {
       result = [{ type: 'json', value: { message: 'Turn ended.' } }]
     } else if (toolName === 'write_file' || toolName === 'str_replace') {
       result = await changeFile({
+        parameters: input,
+        cwd: requireCwd(cwd, toolName),
+        fs,
+      })
+    } else if (toolName === 'apply_patch') {
+      result = await applyPatchTool({
         parameters: input,
         cwd: requireCwd(cwd, toolName),
         fs,
@@ -631,6 +735,8 @@ async function handleToolCall({
         cwd: path.resolve(resolvedCwd, input.cwd ?? '.'),
         env,
       } as Parameters<typeof runTerminalCommand>[0])
+    } else if (toolName === 'read_url') {
+      result = await readUrl(input as Parameters<typeof readUrl>[0])
     } else if (toolName === 'code_search') {
       result = await codeSearch({
         projectPath: requireCwd(cwd, 'code_search'),
@@ -659,12 +765,22 @@ async function handleToolCall({
           },
         },
       ]
+    } else if (isComposioMetaToolName(toolName)) {
+      result = await executeComposioToolViaServer({
+        apiKey,
+        toolName,
+        input,
+      })
     } else {
       throw new Error(
         `Tool not implemented in SDK. Please provide an override or modify your agent to not use this tool: ${toolName}`,
       )
     }
   } catch (error) {
+    if (isRunPauseError(error)) {
+      throw error
+    }
+
     result = [
       {
         type: 'json',
@@ -762,11 +878,13 @@ async function handlePromptResponse({
   resolve,
   onError,
   initialSessionState,
+  traceSessionId,
 }: {
   action: ServerAction<'prompt-response'> | ServerAction<'prompt-error'>
   resolve: (value: RunReturnType) => any
   onError: (error: { message: string }) => void
   initialSessionState: SessionState
+  traceSessionId: string
 }) {
   if (action.type === 'prompt-error') {
     onError({ message: action.message })
@@ -774,6 +892,7 @@ async function handlePromptResponse({
     const statusCode = extractStatusCodeFromMessage(action.message)
     resolve({
       sessionState: initialSessionState,
+      traceSessionId,
       output: {
         type: 'error',
         message: action.message,
@@ -788,11 +907,12 @@ async function handlePromptResponse({
       const message = [
         'Received invalid prompt response from server:',
         JSON.stringify(parsedOutput.error.issues),
-        'If this issues persists, please contact support@codebuff.com',
+        'If this issues persists, please contact support@openbuff.com',
       ].join('\n')
       onError({ message })
       resolve({
         sessionState: initialSessionState,
+        traceSessionId,
         output: {
           type: 'error',
           message,
@@ -804,6 +924,7 @@ async function handlePromptResponse({
 
     const state: RunState = {
       sessionState,
+      traceSessionId,
       output: output ?? {
         type: 'error',
         message: 'No output from agent',
@@ -817,6 +938,7 @@ async function handlePromptResponse({
     })
     resolve({
       sessionState: initialSessionState,
+      traceSessionId,
       output: {
         type: 'error',
         message: 'Internal error: prompt response type not handled',

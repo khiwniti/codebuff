@@ -1,8 +1,8 @@
-import { WEBSITE_URL } from '@codebuff/sdk'
-
+import { WEBSITE_URL } from '@khiwniti/sdk'
 import type {
   PublishAgentsResponse,
-} from '@codebuff/common/types/api/agents/publish'
+} from '@khiwniti/common/types/api/agents/publish'
+import type { FeedbackRequest } from '@khiwniti/common/schemas/feedback'
 
 /**
  * API response types for consistent error handling.
@@ -19,10 +19,10 @@ export type ApiResponse<T> =
 // ============================================================================
 
 /** User fields that can be fetched from /api/v1/me */
-export type UserField = 'id' | 'email' | 'discord_id' | 'referral_code'
+export type UserField = 'id' | 'email' | 'discord_id'
 
 export type UserDetails<T extends UserField = UserField> = {
-  [K in T]: K extends 'discord_id' | 'referral_code' ? string | null : string
+  [K in T]: K extends 'discord_id' ? string | null : string
 }
 
 export interface UsageRequest {
@@ -57,19 +57,14 @@ export interface LoginStatusResponse {
   user?: Record<string, unknown>
 }
 
-export interface ReferralRequest {
-  referralCode: string
-}
-
-export interface ReferralResponse {
-  credits_redeemed?: number
-  error?: string
-}
-
 export interface LogoutRequest {
   userId?: string
   fingerprintId?: string
   fingerprintHash?: string
+}
+
+export interface FeedbackResponse {
+  success: boolean
 }
 
 /**
@@ -186,9 +181,6 @@ export interface CodebuffApiClient {
     req: LoginStatusRequest,
   ): Promise<ApiResponse<LoginStatusResponse>>
 
-  /** Redeem a referral code via /api/referrals */
-  referral(req: ReferralRequest): Promise<ApiResponse<ReferralResponse>>
-
   /** Publish agents via /api/agents/publish */
   publish(
     data: Record<string, unknown>[],
@@ -197,6 +189,58 @@ export interface CodebuffApiClient {
 
   /** Logout via /api/auth/cli/logout */
   logout(req?: LogoutRequest): Promise<ApiResponse<void>>
+
+  /** Submit feedback via /api/v1/feedback */
+  feedback(req: FeedbackRequest): Promise<ApiResponse<FeedbackResponse>>
+}
+
+const TLS_CERTIFICATE_ERROR_CODES = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'CERT_HAS_EXPIRED',
+])
+
+function getTlsCertificateError(error: Error, depth = 0): Error | null {
+  const code =
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    typeof error.code === 'string'
+      ? error.code
+      : undefined
+  const message = error.message.toLowerCase()
+  if (
+    (code && TLS_CERTIFICATE_ERROR_CODES.has(code)) ||
+    message.includes('self signed certificate') ||
+    message.includes('unable to verify the first certificate') ||
+    message.includes('certificate has expired') ||
+    message.includes('certificate verify failed')
+  ) {
+    return error
+  }
+
+  if (depth >= 2 || !(error.cause instanceof Error)) {
+    return null
+  }
+
+  return getTlsCertificateError(error.cause, depth + 1)
+}
+
+function formatNetworkErrorMessage(error: Error, method: string, url: string) {
+  const requestUrl = new URL(url)
+  const tlsCertificateError = getTlsCertificateError(error)
+
+  if (tlsCertificateError) {
+    return [
+      `TLS certificate verification failed for ${requestUrl.origin}.`,
+      'If your network intercepts HTTPS traffic, install its root certificate into your system trust store or use a network path that does not intercept TLS.',
+      `Original error: ${tlsCertificateError.message} (${method} ${url})`,
+    ].join(' ')
+  }
+
+  return `${error.message} (${method} ${url})`
 }
 
 /**
@@ -231,6 +275,9 @@ const isRetryableError = (error: unknown): boolean => {
 
     // Don't retry abort errors - they indicate intentional cancellation
     if (name === 'aborterror') {
+      return false
+    }
+    if (getTlsCertificateError(error)) {
       return false
     }
 
@@ -396,7 +443,7 @@ export function createCodebuffApiClient(
         // Don't retry, throw the error with URL context
         if (error instanceof Error) {
           const enhancedError = new Error(
-            `${error.message} (${method} ${url})`,
+            formatNetworkErrorMessage(error, method, url),
           )
           enhancedError.name = error.name
           enhancedError.cause = error
@@ -488,17 +535,6 @@ export function createCodebuffApiClient(
       })
     },
 
-    referral(req: ReferralRequest): Promise<ApiResponse<ReferralResponse>> {
-      // Auth is sent via Authorization header (includeAuth defaults to true)
-      // Also include cookie for legacy web session support
-      return request<ReferralResponse>(
-        'POST',
-        '/api/referrals',
-        { referralCode: req.referralCode },
-        { includeCookie: true },
-      )
-    },
-
     publish(
       data: Record<string, unknown>[],
       allLocalAgentIds?: string[],
@@ -516,6 +552,13 @@ export function createCodebuffApiClient(
         userId: req.userId,
         fingerprintId: req.fingerprintId,
         fingerprintHash: req.fingerprintHash,
+      })
+    },
+
+    feedback(req: FeedbackRequest): Promise<ApiResponse<FeedbackResponse>> {
+      return request<FeedbackResponse>('POST', '/api/v1/feedback', req, {
+        // Feedback submissions are not idempotent server-side yet, so avoid automatic retries.
+        retry: false,
       })
     },
   }

@@ -1,6 +1,6 @@
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import * as validationModule from '@codebuff/common/templates/agent-validation'
-import { getStubProjectFileContext } from '@codebuff/common/util/file'
+import * as validationModule from '@khiwniti/common/templates/agent-validation'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { getStubProjectFileContext } from '@khiwniti/common/util/file'
 import {
   describe,
   expect,
@@ -20,10 +20,10 @@ import type { AgentTemplate } from '../types'
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
-} from '@codebuff/common/types/contracts/agent-runtime'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { DynamicAgentTemplate } from '@codebuff/common/types/dynamic-agent-template'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+} from '@khiwniti/common/types/contracts/agent-runtime'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { DynamicAgentTemplate } from '@khiwniti/common/types/dynamic-agent-template'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 
 let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
 
@@ -361,7 +361,7 @@ describe('Agent Registry', () => {
             id: 'invalid-agent',
             displayName: 'Invalid Agent',
             // Missing required fields to trigger validation error
-          } as any,
+          } as Partial<DynamicAgentTemplate>, // invalid - missing required fields
         },
       }
 

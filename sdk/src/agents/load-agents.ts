@@ -5,7 +5,7 @@ import { pathToFileURL } from 'url'
 
 import { validateAgents } from '../validate-agents'
 
-import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
+import type { AgentDefinition } from '@khiwniti/common/templates/initial-agents-dir/types/agent-definition'
 
 /**
  * Agent definition with source file path metadata.
@@ -105,6 +105,22 @@ export type LoadLocalAgentsResult = {
 
 const agentFileExtensions = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs'])
 
+const shouldSkipAgentDirectory = (name: string): boolean =>
+  name.startsWith('.') ||
+  name === 'node_modules' ||
+  name === 'scripts' ||
+  name === 'skills' ||
+  name.startsWith('skills-')
+
+const isLoadableAgentFileName = (fileName: string): boolean => {
+  const extension = path.extname(fileName).toLowerCase()
+  return (
+    agentFileExtensions.has(extension) &&
+    !fileName.endsWith('.d.ts') &&
+    !/[./](test|spec)\.[cm]?[tj]sx?$/.test(fileName)
+  )
+}
+
 const getAllAgentFiles = (dir: string): string[] => {
   const files: string[] = []
   try {
@@ -112,21 +128,17 @@ const getAllAgentFiles = (dir: string): string[] => {
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name)
       if (entry.isDirectory()) {
+        if (shouldSkipAgentDirectory(entry.name)) continue
         files.push(...getAllAgentFiles(fullPath))
         continue
       }
-      const extension = path.extname(entry.name).toLowerCase()
-      const isAgentFile =
-        entry.isFile() &&
-        agentFileExtensions.has(extension) &&
-        !entry.name.endsWith('.d.ts') &&
-        !entry.name.endsWith('.test.ts')
+      const isAgentFile = entry.isFile() && isLoadableAgentFileName(entry.name)
       if (isAgentFile) {
         files.push(fullPath)
       }
     }
   } catch {
-    // Ignore missing agent directories
+    // Expected for user agent directories that may not exist
   }
   return files
 }

@@ -3,18 +3,22 @@ import {
   generateAnonymousId,
   type AnalyticsClientWithIdentify,
   type PostHogClientOptions,
-} from '@codebuff/common/analytics-core'
+} from '@khiwniti/common/analytics-core'
 import {
   env as defaultEnv,
   IS_PROD as defaultIsProd,
   DEBUG_ANALYTICS,
-} from '@codebuff/common/env'
+} from '@khiwniti/common/env'
+import { shouldTrackAnalyticsEvent } from '@khiwniti/common/util/analytics-sampling'
+import { shouldMirrorAnalyticsEvent } from '@khiwniti/common/util/log-mirror'
 
-import type { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
+import { enqueueClientLog } from './log-shipper'
+
+import { AnalyticsEvent } from '@khiwniti/common/constants/analytics-events'
 
 
 // Re-export types from core for backwards compatibility
-export type { AnalyticsClientWithIdentify as AnalyticsClient } from '@codebuff/common/analytics-core'
+export type { AnalyticsClientWithIdentify as AnalyticsClient } from '@khiwniti/common/analytics-core'
 
 export enum AnalyticsErrorStage {
   Init = 'init',
@@ -88,16 +92,18 @@ function logAnalyticsDebug(message: string, data: Record<string, unknown>) {
   if (!DEBUG_ANALYTICS) {
     return
   }
-  void loadLogger()
+  loadLogger()
     .then(({ logger }) => {
       logger.debug(data, message)
     })
-    .catch(() => {
+    .catch((error) => {
       try {
         console.debug(message, data)
       } catch {
         // Ignore console errors in restricted environments
       }
+      // Log the error to help diagnose logger issues in debug mode
+      console.debug('Failed to load logger for analytics:', error)
     })
 }
 
@@ -209,6 +215,10 @@ export function trackEvent(
     return
   }
 
+  if (!shouldTrackAnalyticsEvent({ event, distinctId, properties })) {
+    return
+  }
+
   try {
     client.capture({
       distinctId,
@@ -221,6 +231,26 @@ export function trackEvent(
       event,
       properties,
     })
+  }
+
+  // Mirror analytics events into the Axiom logs sink too (PostHog stays the
+  // product-analytics source of truth). The shipper batches and ships even
+  // before login (anonymously), so pre-auth events like app_launched reach
+  // Axiom — making install→login funnels queryable in APL. We correlate on the
+  // anonymous/run id so pre- and post-login events join. CLI_LOG is excluded
+  // because the logger already mirrors log rows to Axiom (avoids double-ship).
+  if (event !== AnalyticsEvent.CLI_LOG && shouldMirrorAnalyticsEvent(event)) {
+    try {
+      enqueueClientLog({
+        level: 'info',
+        event,
+        message: event,
+        client_session_id: anonymousId ?? currentUserId,
+        data: properties,
+      })
+    } catch {
+      // Best-effort mirror; never let it affect analytics or the app.
+    }
   }
 }
 

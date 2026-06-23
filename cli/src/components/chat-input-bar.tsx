@@ -1,3 +1,7 @@
+import {
+  isShallowScanRoot,
+  SHALLOW_SCAN_MAX_DEPTH,
+} from '@khiwniti/common/project-file-tree'
 import React from 'react'
 
 import { AgentModeToggle } from './agent-mode-toggle'
@@ -10,12 +14,14 @@ import { PublishContainer } from './publish-container'
 import { SuggestionMenu, type SuggestionItem } from './suggestion-menu'
 import { useAskUserBridge } from '../hooks/use-ask-user-bridge'
 import { useEvent } from '../hooks/use-event'
+import { tryGetProjectRoot } from '../project-files'
 import { useChatStore } from '../state/chat-store'
+import { shouldInterceptChatInputKey } from '../utils/chat-input-key-intercept'
 import { getInputModeConfig } from '../utils/input-modes'
 import { BORDER_CHARS } from '../utils/ui-constants'
 
 import type { useTheme } from '../hooks/use-theme'
-import type { InputValue } from '../state/chat-store'
+import type { InputValue } from '../types/store'
 import type { AgentMode } from '../utils/constants'
 
 type Theme = ReturnType<typeof useTheme>
@@ -70,6 +76,7 @@ interface ChatInputBarProps {
   // Handlers
   handleSubmit: () => Promise<void>
   onPaste: (fallbackText?: string) => void
+  onInterruptStream: () => void
 }
 
 export const ChatInputBar = ({
@@ -107,6 +114,7 @@ export const ChatInputBar = ({
   handlePublish,
   handleSubmit,
   onPaste,
+  onInterruptStream,
 }: ChatInputBarProps) => {
   const inputMode = useChatStore((state) => state.inputMode)
   const setInputMode = useChatStore((state) => state.setInputMode)
@@ -114,45 +122,35 @@ export const ChatInputBar = ({
   const modeConfig = getInputModeConfig(inputMode)
   const askUserState = useChatStore((state) => state.askUserState)
   const hasAnyPreview = hasSuggestionMenu
+
+  // In the home directory (or an ancestor) the file tree is only scanned a few
+  // levels deep, so tell the user why deeper files don't show up.
+  const mentionMenuFooter = isShallowScanRoot(tryGetProjectRoot())
+    ? `Files shown up to ${SHALLOW_SCAN_MAX_DEPTH} levels deep — open a project folder for full results`
+    : undefined
+
+  // Increase menu size on larger screen heights
+  const normalModeMaxVisible = terminalHeight > 35 ? 15 : 10
   const { submitAnswers, skip } = useAskUserBridge()
   const [askUserTitle] = React.useState(' Some questions for you ')
 
-  // Shared key intercept handler for suggestion menu navigation
+  // Shared key intercept handler for suggestion menu navigation and history navigation
   const handleKeyIntercept = useEvent(
     (key: {
       name?: string
+      sequence?: string
       shift?: boolean
       ctrl?: boolean
       meta?: boolean
       option?: boolean
     }) => {
-      // Intercept navigation keys when suggestion menu is active
-      // The useChatKeyboard hook will handle menu selection/navigation
-      const hasSuggestions = hasSlashSuggestions || hasMentionSuggestions
-      if (!hasSuggestions) return false
-
-      const isPlainEnter =
-        (key.name === 'return' || key.name === 'enter') &&
-        !key.shift &&
-        !key.ctrl &&
-        !key.meta &&
-        !key.option
-      const isTab = key.name === 'tab' && !key.ctrl && !key.meta && !key.option
-      const isUpDown =
-        (key.name === 'up' || key.name === 'down') &&
-        !key.ctrl &&
-        !key.meta &&
-        !key.option
-
-      // Don't intercept Up/Down when user is navigating history
-      if (isUpDown && lastEditDueToNav) {
-        return false
-      }
-
-      if (isPlainEnter || isTab || isUpDown) {
-        return true
-      }
-      return false
+      return shouldInterceptChatInputKey(key, {
+        hasSlashSuggestions,
+        hasMentionSuggestions,
+        lastEditDueToNav,
+        cursorPosition,
+        inputLength: inputValue.length,
+      })
     },
   )
 
@@ -180,6 +178,16 @@ export const ChatInputBar = ({
   // Out of credits mode: replace entire input with out-of-credits banner
   if (inputMode === 'outOfCredits') {
     return <OutOfCreditsBanner />
+  }
+
+  // Subscription limit mode: show only the limit banner (no input box)
+  if (inputMode === 'subscriptionLimit') {
+    return <InputModeBanner />
+  }
+
+  // ChatGPT connect mode: show only the connect panel (no input box)
+  if (inputMode === 'connect:chatgpt') {
+    return <InputModeBanner />
   }
 
   // Handle input changes with special mode entry detection
@@ -265,6 +273,7 @@ export const ChatInputBar = ({
   const handleFormSkip = () => {
     if (!askUserState) return
     skip()
+    onInterruptStream()
   }
 
   const effectivePlaceholder =
@@ -313,6 +322,7 @@ export const ChatInputBar = ({
             maxVisible={5}
             prefix="@"
             onItemClick={onMentionItemClick}
+            footer={mentionMenuFooter}
           />
         ) : null}
         <box
@@ -325,6 +335,16 @@ export const ChatInputBar = ({
             backgroundColor: theme.surface,
           }}
         >
+          {modeConfig.label && (
+            <box style={{ flexShrink: 0, paddingRight: 1 }}>
+              <text>
+                <span
+                  bg={theme.info}
+                  fg={theme.background}
+                >{` ${modeConfig.label} `}</span>
+              </text>
+            </box>
+          )}
           {modeConfig.icon && (
             <box
               style={{
@@ -335,6 +355,14 @@ export const ChatInputBar = ({
               <text style={{ fg: theme[modeConfig.color] }}>
                 {modeConfig.icon}
               </text>
+            </box>
+          )}
+          {/* In default modes the compact box has no border or label, so it can
+              read as a passive status line. A shell-style prompt glyph signals
+              that it's a focusable input — costs no extra height. */}
+          {!modeConfig.label && !modeConfig.icon && (
+            <box style={{ flexShrink: 0 }}>
+              <text style={{ fg: theme.primary }}>❯</text>
             </box>
           )}
           <MultilineInput
@@ -377,7 +405,7 @@ export const ChatInputBar = ({
           <SuggestionMenu
             items={slashSuggestionItems}
             selectedIndex={slashSelectedIndex}
-            maxVisible={10}
+            maxVisible={normalModeMaxVisible}
             prefix="/"
             onItemClick={onSlashItemClick}
           />
@@ -386,9 +414,10 @@ export const ChatInputBar = ({
           <SuggestionMenu
             items={[...agentSuggestionItems, ...fileSuggestionItems]}
             selectedIndex={agentSelectedIndex}
-            maxVisible={10}
+            maxVisible={normalModeMaxVisible}
             prefix="@"
             onItemClick={onMentionItemClick}
+            footer={mentionMenuFooter}
           />
         ) : null}
         <box
@@ -408,6 +437,16 @@ export const ChatInputBar = ({
               width: '100%',
             }}
           >
+            {modeConfig.label && (
+              <box style={{ flexShrink: 0, paddingRight: 1 }}>
+                <text>
+                  <span
+                    bg={theme.info}
+                    fg={theme.background}
+                  >{` ${modeConfig.label} `}</span>
+                </text>
+              </box>
+            )}
             {modeConfig.icon && (
               <box
                 style={{

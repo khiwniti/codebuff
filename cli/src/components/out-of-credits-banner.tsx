@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react'
+import { IS_FREEBUFF } from '../utils/constants'
 
+import { ShimmerText } from './shimmer-text'
 import { getActivityQueryData } from '../hooks/use-activity-query'
+import { useTheme } from '../hooks/use-theme'
 import { usageQueryKeys, useUsageQuery } from '../hooks/use-usage-query'
 import { useChatStore } from '../state/chat-store'
-import { useTheme } from '../hooks/use-theme'
 import { BORDER_CHARS } from '../utils/ui-constants'
-import { ShimmerText } from './shimmer-text'
 
 const CREDIT_POLL_INTERVAL = 5 * 1000 // Poll every 5 seconds
 
@@ -15,6 +16,8 @@ let creditsRestoredGlobal = false
 export const areCreditsRestored = () => creditsRestoredGlobal
 
 export const OutOfCreditsBanner = () => {
+  if (IS_FREEBUFF) return null
+
   const sessionCreditsUsed = useChatStore((state) => state.sessionCreditsUsed)
   const [creditsRestored, setCreditsRestored] = useState(false)
 

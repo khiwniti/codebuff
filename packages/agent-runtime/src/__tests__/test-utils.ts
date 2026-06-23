@@ -1,7 +1,9 @@
-import { generateCompactId } from '@codebuff/common/util/string'
+import { promptSuccess } from '@khiwniti/common/util/error'
+import { generateCompactId } from '@khiwniti/common/util/string'
 
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+import type { StreamChunk } from '@khiwniti/common/types/contracts/llm'
+import type { PromptResult } from '@khiwniti/common/util/error'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 
 /**
  * Creates a native tool call stream chunk for testing.
@@ -26,8 +28,11 @@ export function createToolCallChunk<T extends string>(
  */
 export function createMockStreamWithToolCalls(
   chunks: (string | { toolName: string; input: Record<string, unknown> })[],
-): AsyncGenerator<StreamChunk, string | null> {
-  async function* generator(): AsyncGenerator<StreamChunk, string | null> {
+): AsyncGenerator<StreamChunk, PromptResult<string | null>> {
+  async function* generator(): AsyncGenerator<
+    StreamChunk,
+    PromptResult<string | null>
+  > {
     for (const chunk of chunks) {
       if (typeof chunk === 'string') {
         yield { type: 'text' as const, text: chunk }
@@ -35,7 +40,7 @@ export function createMockStreamWithToolCalls(
         yield createToolCallChunk(chunk.toolName, chunk.input)
       }
     }
-    return 'mock-message-id'
+    return promptSuccess('mock-message-id')
   }
   return generator()
 }
@@ -64,5 +69,6 @@ export const mockFileContext: ProjectFileContext = {
     arch: 'test',
     homedir: '/home/test',
     cpus: 1,
+    chromeAvailable: false,
   },
 }

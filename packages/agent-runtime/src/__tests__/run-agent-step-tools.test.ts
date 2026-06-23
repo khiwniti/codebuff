@@ -1,14 +1,16 @@
-import * as bigquery from '@codebuff/bigquery'
-import * as analytics from '@codebuff/common/analytics'
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
-import db from '@codebuff/internal/db'
+import * as analytics from '@khiwniti/common/analytics'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import {
+  createMockDbOperations,
+  setupDbSpies,
+} from '@khiwniti/common/testing/mocks/database'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
+import { promptSuccess } from '@khiwniti/common/util/error'
+import { assistantMessage, userMessage } from '@khiwniti/common/util/messages'
 import {
   afterAll,
   afterEach,
-
   beforeEach,
   describe,
   expect,
@@ -19,24 +21,30 @@ import {
 
 import { runAgentStep } from '../run-agent-step'
 import { clearAgentGeneratorCache } from '../run-programmatic-step'
-import { asUserMessage } from '../util/messages'
 import { createToolCallChunk } from './test-utils'
+import { asUserMessage } from '../util/messages'
 
 import type { AgentTemplate } from '../templates/types'
+import type { DbSpies } from '@khiwniti/common/testing/mocks/database'
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
-} from '@codebuff/common/types/contracts/agent-runtime'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+} from '@khiwniti/common/types/contracts/agent-runtime'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 
 describe('runAgentStep - set_output tool', () => {
   let testAgent: AgentTemplate
   let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
   let runAgentStepBaseParams: ParamsExcluding<
     typeof runAgentStep,
-    'agentType' | 'prompt' | 'localAgentTemplates' | 'agentState' | 'agentTemplate'
+    | 'agentType'
+    | 'prompt'
+    | 'localAgentTemplates'
+    | 'agentState'
+    | 'agentTemplate'
   >
+  let dbSpies: DbSpies
 
   beforeEach(async () => {
     agentRuntimeImpl = { ...TEST_AGENT_RUNTIME_IMPL, sendAction: () => {} }
@@ -59,22 +67,11 @@ describe('runAgentStep - set_output tool', () => {
       stepPrompt: 'Test agent step prompt',
     }
 
-    // Setup spies for database operations
-    spyOn(db, 'insert').mockReturnValue({
-      values: mock(() => Promise.resolve({ id: 'test-run-id' })),
-    } as any)
+    // Setup spies for database operations using typed helper
+    dbSpies = setupDbSpies(createMockDbOperations())
 
-    spyOn(db, 'update').mockReturnValue({
-      set: mock(() => ({
-        where: mock(() => Promise.resolve()),
-      })),
-    } as any)
-
-    // Mock analytics and tracing
+    // Mock analytics
     spyOn(analytics, 'trackEvent').mockImplementation(() => {})
-    spyOn(bigquery, 'insertTrace').mockImplementation(() =>
-      Promise.resolve(true),
-    )
 
     agentRuntimeImpl.requestFiles = async ({ filePaths }) => {
       const results: Record<string, string | null> = {}
@@ -102,7 +99,7 @@ describe('runAgentStep - set_output tool', () => {
 
     // Mock LLM APIs
     agentRuntimeImpl.promptAiSdk = async function () {
-      return 'Test response'
+      return promptSuccess('Test response')
     }
     clearAgentGeneratorCache(agentRuntimeImpl)
 
@@ -128,6 +125,7 @@ describe('runAgentStep - set_output tool', () => {
   })
 
   afterEach(() => {
+    dbSpies.restore()
     mock.restore()
   })
 
@@ -156,6 +154,7 @@ describe('runAgentStep - set_output tool', () => {
       arch: 'test',
       homedir: '/home/test',
       cpus: 1,
+      chromeAvailable: false,
     },
     agentTemplates: {},
     customToolDefinitions: {},
@@ -166,7 +165,7 @@ describe('runAgentStep - set_output tool', () => {
       yield createToolCallChunk('set_output', { message: 'Hi' })
       yield { type: 'text' as const, text: '\n\n' }
       yield createToolCallChunk('end_turn', {})
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     const sessionState = getInitialSessionState(mockFileContext)
@@ -198,7 +197,7 @@ describe('runAgentStep - set_output tool', () => {
         findings: ['Bug in auth.ts', 'Missing validation'],
       })
       yield createToolCallChunk('end_turn', {})
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     const sessionState = getInitialSessionState(mockFileContext)
@@ -231,7 +230,7 @@ describe('runAgentStep - set_output tool', () => {
         existingField: 'updated value',
       })
       yield createToolCallChunk('end_turn', {})
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     const sessionState = getInitialSessionState(mockFileContext)
@@ -264,7 +263,7 @@ describe('runAgentStep - set_output tool', () => {
     runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
       yield createToolCallChunk('set_output', {})
       yield createToolCallChunk('end_turn', {})
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     const sessionState = getInitialSessionState(mockFileContext)
@@ -336,7 +335,7 @@ describe('runAgentStep - set_output tool', () => {
     // Mock the LLM stream to return a response that doesn't end the turn
     runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
       yield { type: 'text' as const, text: 'Continuing with the analysis...' } // Non-empty response, no tool calls
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     const sessionState = getInitialSessionState(mockFileContext)
@@ -480,7 +479,7 @@ describe('runAgentStep - set_output tool', () => {
         agent_type: 'message-deleter-agent',
         prompt: 'Delete the last two assistant messages',
       })
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     const sessionState = getInitialSessionState(mockFileContext)

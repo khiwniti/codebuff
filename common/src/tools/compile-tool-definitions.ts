@@ -3,40 +3,61 @@ import z from 'zod/v4'
 import { publishedTools } from './constants'
 import { toolParams } from './list'
 
+/** A tool name plus the Zod schema describing its parameters. */
+export interface ToolSchemaEntry {
+  /** Snake_case tool name, e.g. 'web_search'. */
+  name: string
+  /** Zod schema for the tool's parameters. */
+  inputSchema: z.ZodType
+}
+
+/** The published tools and their parameter schemas, in published order. */
+function getPublishedToolEntries(): ToolSchemaEntry[] {
+  return publishedTools.map((toolName) => ({
+    name: toolName,
+    inputSchema: toolParams[toolName].inputSchema,
+  }))
+}
+
 /**
- * Compiles all tool definitions into a single TypeScript definition file content.
- * This generates type definitions for all available tools and their parameters.
+ * Compiles tool definitions into a single TypeScript definition file content.
+ * This generates type definitions for the given tools and their parameters.
+ *
+ * Defaults to every published tool; callers (e.g. tests) may pass an explicit
+ * list to compile definitions for a specific set of schemas instead.
  */
-export function compileToolDefinitions(): string {
-  const toolEntries = publishedTools.map(
-    (toolName) => [toolName, toolParams[toolName]] as const,
-  )
-
-  const toolInterfaces = toolEntries
-    .map(([toolName, toolDef]) => {
-      const parameterSchema = toolDef.inputSchema
-
+export function compileToolDefinitions(
+  tools: ToolSchemaEntry[] = getPublishedToolEntries(),
+): string {
+  const toolInterfaces = tools
+    .map(({ name: toolName, inputSchema: parameterSchema }) => {
       // Convert Zod schema to TypeScript interface using JSON schema
       let typeDefinition: string
+      let jsonSchema: unknown
       try {
-        const jsonSchema = z.toJSONSchema(parameterSchema, { io: 'input' })
+        jsonSchema = z.toJSONSchema(parameterSchema, { io: 'input' })
         typeDefinition = jsonSchemaToTypeScript(jsonSchema)
       } catch (error) {
         console.warn(`Failed to convert schema for ${toolName}:`, error)
         typeDefinition = '{ [key: string]: any }'
       }
 
+      const typeName = `${toPascalCase(toolName)}Params`
+      const declaration = canEmitInterface(jsonSchema)
+        ? `export interface ${typeName} ${typeDefinition}`
+        : `export type ${typeName} = ${typeDefinition}`
+
       return `/**
  * ${parameterSchema.description || `Parameters for ${toolName} tool`}
  */
-export interface ${toPascalCase(toolName)}Params ${typeDefinition}`
+${declaration}`
     })
     .join('\n\n')
 
-  const toolUnion = toolEntries.map(([toolName]) => `'${toolName}'`).join(' | ')
+  const toolUnion = tools.map(({ name }) => `'${name}'`).join(' | ')
 
-  const toolParamsMap = toolEntries
-    .map(([toolName]) => `  '${toolName}': ${toPascalCase(toolName)}Params`)
+  const toolParamsMap = tools
+    .map(({ name }) => `  '${name}': ${toPascalCase(name)}Params`)
     .join('\n')
 
   return `/**
@@ -89,13 +110,26 @@ function jsonSchemaToTypeScript(schema: any): string {
   return getTypeFromJsonSchema(schema)
 }
 
+function canEmitInterface(schema: any): boolean {
+  return (
+    schema.type === 'object' &&
+    !!schema.properties &&
+    !schema.anyOf &&
+    !schema.oneOf
+  )
+}
+
 /**
  * Gets TypeScript type from JSON Schema property
  */
 function getTypeFromJsonSchema(prop: any): string {
+  if (prop.const !== undefined) {
+    return JSON.stringify(prop.const)
+  }
+
   if (prop.type === 'string') {
     if (prop.enum) {
-      return prop.enum.map((v: string) => `"${v}"`).join(' | ')
+      return prop.enum.map((v: string) => JSON.stringify(v)).join(' | ')
     }
     return 'string'
   }

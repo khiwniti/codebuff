@@ -3,7 +3,7 @@ import type {
   ClientToolCall,
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
+} from '@khiwniti/common/tools/list'
 
 export const handleCodeSearch = (async (params: {
   previousToolCallFinished: Promise<void>

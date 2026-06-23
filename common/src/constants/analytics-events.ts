@@ -2,8 +2,17 @@
  * Enum of analytics event types used throughout the application
  */
 export enum AnalyticsEvent {
+  // Cross-surface — DAU
+  // Emitted exactly once per user-submitted message/prompt, on each surface
+  // (cli / web / chat), and never sampled. `distinct_id` is the canonical
+  // codebuff Postgres user id on every surface, so unique-users of this event
+  // gives accurate per-surface DAU (filter on the `surface` property) and a
+  // combined DAU (no filter). The `surface` property is one of: cli, web, chat.
+  MESSAGE_SENT = 'message_sent',
+
   // CLI
   APP_LAUNCHED = 'cli.app_launched',
+  FINGERPRINT_GENERATED = 'cli.fingerprint_generated',
   CHANGE_DIRECTORY = 'cli.change_directory',
   INVALID_COMMAND = 'cli.invalid_command',
   KNOWLEDGE_FILE_UPDATED = 'cli.knowledge_file_updated',
@@ -13,9 +22,10 @@ export enum AnalyticsEvent {
   TERMINAL_COMMAND_COMPLETED = 'cli.terminal_command_completed',
   USER_INPUT_COMPLETE = 'cli.user_input_complete',
   UPDATE_CODEBUFF_FAILED = 'cli.update_codebuff_failed',
-  FEEDBACK_SUBMITTED = 'cli.feedback_submitted',
   FEEDBACK_BUTTON_HOVERED = 'cli.feedback_button_hovered',
   FOLLOWUP_CLICKED = 'cli.followup_clicked',
+  SUGGESTED_PROMPT_SHOWN = 'cli.suggested_prompt_shown',
+  SUGGESTED_PROMPT_CLICKED = 'cli.suggested_prompt_clicked',
 
   // Backend
   AGENT_STEP = 'backend.agent_step',
@@ -26,12 +36,25 @@ export enum AnalyticsEvent {
   UNKNOWN_TOOL_CALL = 'backend.unknown_tool_call',
   USER_INPUT = 'backend.user_input',
 
+  // Backend - Database Operations
+  ADVISORY_LOCK_CONTENTION = 'backend.advisory_lock_contention',
+  TRANSACTION_RETRY_THRESHOLD_EXCEEDED = 'backend.transaction_retry_threshold_exceeded',
+
+  // Backend - Subscription
+  SUBSCRIPTION_CREATED = 'backend.subscription_created',
+  SUBSCRIPTION_CANCELED = 'backend.subscription_canceled',
+  SUBSCRIPTION_PAYMENT_FAILED = 'backend.subscription_payment_failed',
+  SUBSCRIPTION_BLOCK_CREATED = 'backend.subscription_block_created',
+  SUBSCRIPTION_BLOCK_LIMIT_HIT = 'backend.subscription_block_limit_hit',
+  SUBSCRIPTION_WEEKLY_LIMIT_HIT = 'backend.subscription_weekly_limit_hit',
+  SUBSCRIPTION_CREDITS_MIGRATED = 'backend.subscription_credits_migrated',
+  SUBSCRIPTION_TIER_CHANGED = 'backend.subscription_tier_changed',
+
   // Web
   SIGNUP = 'web.signup',
 
   // Web - Authentication
   AUTH_LOGIN_STARTED = 'auth.login_started',
-  AUTH_REFERRAL_GITHUB_LOGIN_STARTED = 'auth.referral_github_login_started',
   AUTH_LOGOUT_COMPLETED = 'auth.logout_completed',
 
   // Web - Cookie Consent
@@ -48,6 +71,9 @@ export enum AnalyticsEvent {
   ONBOARD_PAGE_CD_COMMAND_COPIED = 'onboard_page.cd_command_copied',
   ONBOARD_PAGE_RUN_COMMAND_COPIED = 'onboard_page.run_command_copied',
   ONBOARD_PAGE_INSTALL_COMMAND_COPIED = 'onboard_page.install_command_copied',
+
+  // Web - Creator Attribution
+  CODEBUFF_REFERRER_ATTRIBUTED = 'codebuff.referrer_attributed',
 
   // Web - Install Dialog
   INSTALL_DIALOG_CD_COMMAND_COPIED = 'install_dialog.cd_command_copied',
@@ -73,7 +99,6 @@ export enum AnalyticsEvent {
 
   // Web - UI Components
   TOAST_SHOWN = 'toast.shown',
-  REFERRAL_BANNER_CLICKED = 'referral_banner.clicked',
 
   // Web - API
   AGENT_RUN_API_REQUEST = 'api.agent_run_request',
@@ -109,8 +134,23 @@ export enum AnalyticsEvent {
   DOCS_SEARCH_INSUFFICIENT_CREDITS = 'api.docs_search_insufficient_credits',
   DOCS_SEARCH_ERROR = 'api.docs_search_error',
 
+  GRAVITY_INDEX_REQUEST = 'api.gravity_index_request',
+  GRAVITY_INDEX_AUTH_ERROR = 'api.gravity_index_auth_error',
+  GRAVITY_INDEX_VALIDATION_ERROR = 'api.gravity_index_validation_error',
+  GRAVITY_INDEX_ERROR = 'api.gravity_index_error',
+
+  // Web - Feedback API
+  FEEDBACK_SUBMITTED = 'api.feedback_submitted',
+  FEEDBACK_AUTH_ERROR = 'api.feedback_auth_error',
+  FEEDBACK_VALIDATION_ERROR = 'api.feedback_validation_error',
+
+  // Web - Logs ingest API (client logs/events → BigQuery)
+  LOGS_INGEST_AUTH_ERROR = 'api.logs_ingest_auth_error',
+  LOGS_INGEST_VALIDATION_ERROR = 'api.logs_ingest_validation_error',
+
   // Web - Ads API
   ADS_API_AUTH_ERROR = 'api.ads_auth_error',
+  ADS_CLICKED = 'ads.clicked',
 
   // Web - Token Count API
   TOKEN_COUNT_REQUEST = 'api.token_count_request',
@@ -118,11 +158,28 @@ export enum AnalyticsEvent {
   TOKEN_COUNT_VALIDATION_ERROR = 'api.token_count_validation_error',
   TOKEN_COUNT_ERROR = 'api.token_count_error',
 
-  // Claude OAuth
-  CLAUDE_OAUTH_REQUEST = 'sdk.claude_oauth_request',
-  CLAUDE_OAUTH_RATE_LIMITED = 'sdk.claude_oauth_rate_limited',
-  CLAUDE_OAUTH_AUTH_ERROR = 'sdk.claude_oauth_auth_error',
+  // ChatGPT OAuth
+  CHATGPT_OAUTH_REQUEST = 'sdk.chatgpt_oauth_request',
+  CHATGPT_OAUTH_RATE_LIMITED = 'sdk.chatgpt_oauth_rate_limited',
+  CHATGPT_OAUTH_AUTH_ERROR = 'sdk.chatgpt_oauth_auth_error',
+
+  // Freebuff - Creator Attribution
+  FREEBUFF_REFERRER_ATTRIBUTED = 'freebuff.referrer_attributed',
+
+  // Freebuff - Get Started Page
+  FREEBUFF_GET_STARTED_VIEWED = 'freebuff.get_started_viewed',
+  FREEBUFF_GET_STARTED_HELP_EXPANDED = 'freebuff.get_started_help_expanded',
+  FREEBUFF_GET_STARTED_EDITOR_CLICKED = 'freebuff.get_started_editor_clicked',
+
+  // Freebuff - Home Page
+  FREEBUFF_HOME_INSTALL_COMMAND_COPIED = 'freebuff.home_install_command_copied',
+  FREEBUFF_HOME_GITHUB_CLICKED = 'freebuff.home_github_clicked',
+  FREEBUFF_HOME_INSTALL_GUIDE_EXPANDED = 'freebuff.home_install_guide_expanded',
+  FREEBUFF_HOME_FAQ_OPENED = 'freebuff.home_faq_opened',
 
   // Common
   FLUSH_FAILED = 'common.flush_failed',
+
+  // Client Logging - for sending logger events to PostHog in production
+  CLI_LOG = 'cli.log',
 }

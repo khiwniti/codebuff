@@ -1,6 +1,6 @@
 # BuffBench
 
-BuffBench is Codebuff's evaluation framework for measuring AI coding agent performance through real-world git commit reconstruction tasks.
+BuffBench is Openbuff's evaluation framework for measuring AI coding agent performance through real-world git commit reconstruction tasks.
 
 ## Overview
 
@@ -139,12 +139,13 @@ BuffBench supports running external CLI coding agents for comparison:
 
 - **Claude Code**: Use `external:claude` - requires `claude` CLI installed
 - **Codex**: Use `external:codex` - requires `codex` CLI installed
+- **OpenCode**: Use `external:opencode` - requires `opencode` CLI installed
 
-Example comparing Codebuff vs Claude Code:
+Example comparing Openbuff vs Claude Code:
 
 ```typescript
 await runBuffBench({
-  evalDataPath: 'evals/buffbench/eval-codebuff.json',
+  evalDataPath: 'evals/buffbench/eval-openbuff.json',
   agents: ['base2', 'external:claude'],
   taskConcurrency: 3,
 })
@@ -162,6 +163,13 @@ npm install -g @anthropic-ai/claude-code
 ```bash
 npm install -g @openai/codex
 # Set OPENAI_API_KEY environment variable
+```
+
+**OpenCode CLI:**
+```bash
+# Install from https://opencode.ai/docs/install
+# Set OPENCODE_API_KEY environment variable
+# BuffBench uses opencode/kimi-k2.6 by default; override with OPENCODE_MODEL if needed.
 ```
 
 ## Directory Structure
@@ -188,7 +196,7 @@ evals/buffbench/
 │
 ├── types.ts                  # Type definitions
 │
-├── eval-codebuff.json        # Codebuff project evaluations
+├── eval-openbuff.json        # Openbuff project evaluations
 ├── eval-manifold.json        # Manifold evaluations
 ├── eval-plane.json           # Plane project evaluations
 └── eval-saleor.json          # Saleor e-commerce evaluations
@@ -204,7 +212,7 @@ evals/buffbench/
 import { runBuffBench } from './run-buffbench'
 
 await runBuffBench({
-  evalDataPath: 'eval-codebuff.json',
+  evalDataPath: 'eval-openbuff.json',
   agents: ['base2', 'base2-fast'],
   taskConcurrency: 3,
 })
@@ -378,7 +386,7 @@ logs/YYYY-MM-DDTHH-MM_agent1_vs_agent2/
 {
   "metadata": {
     "timestamp": "2024-01-15T10:30:00.000Z",
-    "evalDataPath": "eval-codebuff.json",
+    "evalDataPath": "eval-openbuff.json",
     "agentsTested": ["base2", "base2-fast"],
     "commitsEvaluated": 10,
     "logsDirectory": "logs/..."
@@ -408,7 +416,7 @@ logs/YYYY-MM-DDTHH-MM_agent1_vs_agent2/
 CODEBUFF_API_KEY=your-api-key
 
 # Optional
-EVAL_RESULTS_EMAIL=team@codebuff.com  # For nightly email reports
+EVAL_RESULTS_EMAIL=team@openbuff.com  # For nightly email reports
 ```
 
 ### Task Concurrency
@@ -425,7 +433,7 @@ taskConcurrency: 10  // High parallelism (faster, more resources)
 
 The `evals/buffbench/` directory contains several example evaluation files:
 
-- **eval-codebuff.json** - Codebuff project evaluations
+- **eval-openbuff.json** - Openbuff project evaluations
 - **eval-manifold.json** - Manifold prediction market evaluations
 - **eval-plane.json** - Plane project management evaluations
 - **eval-saleor.json** - Saleor e-commerce platform evaluations

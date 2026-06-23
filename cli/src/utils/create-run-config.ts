@@ -1,18 +1,20 @@
 import path from 'path'
 
+import { MAX_AGENT_STEPS_DEFAULT } from '@khiwniti/common/constants/agents'
+
 import {
   createEventHandler,
   createStreamChunkHandler,
 } from './sdk-event-handlers'
 
 import type { EventHandlerState } from './sdk-event-handlers'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 import type {
   AgentDefinition,
   FileFilter,
   MessageContent,
   RunState,
-} from '@codebuff/sdk'
+} from '@khiwniti/sdk'
 
 export type CreateRunConfigParams = {
   logger: Logger
@@ -23,6 +25,8 @@ export type CreateRunConfigParams = {
   agentDefinitions: AgentDefinition[]
   eventHandlerState: EventHandlerState
   signal: AbortSignal
+  costMode?: 'free' | 'lite' | 'normal' | 'max' | 'experimental' | 'ask'
+  extraCodebuffMetadata?: Record<string, string>
 }
 
 const SENSITIVE_EXTENSIONS = new Set([
@@ -98,6 +102,8 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     previousRunState,
     agentDefinitions,
     eventHandlerState,
+    costMode,
+    extraCodebuffMetadata,
   } = params
 
   return {
@@ -107,10 +113,12 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     content,
     previousRun: previousRunState ?? undefined,
     agentDefinitions,
-    maxAgentSteps: 100,
+    maxAgentSteps: MAX_AGENT_STEPS_DEFAULT,
     handleStreamChunk: createStreamChunkHandler(eventHandlerState),
     handleEvent: createEventHandler(eventHandlerState),
     signal: params.signal,
+    costMode,
+    extraCodebuffMetadata,
     fileFilter: ((filePath: string) => {
       if (isSensitiveFile(filePath)) return { status: 'blocked' }
       if (isEnvTemplateFile(filePath)) return { status: 'allow-example' }

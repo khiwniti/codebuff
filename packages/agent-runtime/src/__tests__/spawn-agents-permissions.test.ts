@@ -1,7 +1,7 @@
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { assistantMessage } from '@codebuff/common/util/messages'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
+import { assistantMessage } from '@khiwniti/common/util/messages'
 import {
   describe,
   expect,
@@ -18,9 +18,9 @@ import { handleSpawnAgentInline } from '../tools/handlers/tool/spawn-agent-inlin
 import { getMatchingSpawn } from '../tools/handlers/tool/spawn-agent-utils'
 import { handleSpawnAgents } from '../tools/handlers/tool/spawn-agents'
 
-import type { CodebuffToolCall } from '@codebuff/common/tools/list'
-import type { AgentTemplate } from '@codebuff/common/types/agent-template'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
+import type { CodebuffToolCall } from '@khiwniti/common/tools/list'
+import type { AgentTemplate } from '@khiwniti/common/types/agent-template'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
 
 describe('Spawn Agents Permissions', () => {
   let mockSendSubagentChunk: any
@@ -44,7 +44,7 @@ describe('Spawn Agents Permissions', () => {
     inputSchema: {
       prompt: {
         safeParse: () => ({ success: true }),
-      } as any,
+      } as unknown as AgentTemplate['inputSchema']['prompt'],
     },
     spawnerPrompt: '',
     model: '',
@@ -94,7 +94,10 @@ describe('Spawn Agents Permissions', () => {
           ...options.agentState,
           messageHistory: [assistantMessage('Mock agent response')],
         },
-        output: { type: 'lastMessage', value: [assistantMessage('Mock agent response')] },
+        output: {
+          type: 'lastMessage',
+          value: [assistantMessage('Mock agent response')],
+        },
       }
     })
   })
@@ -189,10 +192,31 @@ describe('Spawn Agents Permissions', () => {
         expect(result).toBe('thinker')
       })
 
+      it('should match underscored agent name to hyphenated spawnable agent', () => {
+        const spawnableAgents = ['thinker', 'reviewer', 'file-picker']
+        const result = getMatchingSpawn(spawnableAgents, 'file_picker')
+        expect(result).toBe('file-picker')
+      })
+
       it('should match simple agent name when spawnable has publisher', () => {
         const spawnableAgents = ['codebuff/thinker@1.0.0', 'reviewer']
         const result = getMatchingSpawn(spawnableAgents, 'thinker')
         expect(result).toBe('codebuff/thinker@1.0.0')
+      })
+
+      it('should match underscored agent name when spawnable has publisher and version', () => {
+        const spawnableAgents = ['codebuff/file-picker@1.0.0', 'reviewer']
+        const result = getMatchingSpawn(spawnableAgents, 'file_picker')
+        expect(result).toBe('codebuff/file-picker@1.0.0')
+      })
+
+      it('should match underscored published agent ID to hyphenated spawnable agent', () => {
+        const spawnableAgents = ['codebuff/file-picker@1.0.0']
+        const result = getMatchingSpawn(
+          spawnableAgents,
+          'codebuff/file_picker@1.0.0',
+        )
+        expect(result).toBe('codebuff/file-picker@1.0.0')
       })
 
       it('should match simple agent name when spawnable has version', () => {
@@ -272,6 +296,50 @@ describe('Spawn Agents Permissions', () => {
 
       expect(JSON.stringify(output)).toContain('Mock agent response')
       expect(mockLoopAgentSteps).toHaveBeenCalledTimes(1)
+    })
+
+    it('should allow underscored agent_type when hyphenated agent is spawnable', async () => {
+      const parentAgent = createMockAgent('parent', ['file-picker'])
+      const childAgent = createMockAgent('file-picker')
+      const sessionState = getInitialSessionState(mockFileContext)
+      const toolCall = createSpawnToolCall('file_picker')
+
+      const { output } = await handleSpawnAgents({
+        ...handleSpawnAgentsBaseParams,
+        agentState: sessionState.mainAgentState,
+        agentTemplate: parentAgent,
+        localAgentTemplates: { 'file-picker': childAgent },
+        toolCall,
+      })
+
+      expect(JSON.stringify(output)).toContain('Mock agent response')
+      expect(mockLoopAgentSteps).toHaveBeenCalledTimes(1)
+      expect(mockLoopAgentSteps.mock.calls[0][0].agentState.agentType).toBe(
+        'file-picker',
+      )
+    })
+
+    it('should allow underscored published agent_type when hyphenated agent is spawnable', async () => {
+      const parentAgent = createMockAgent('parent', [
+        'codebuff/file-picker@1.0.0',
+      ])
+      const childAgent = createMockAgent('codebuff/file-picker@1.0.0')
+      const sessionState = getInitialSessionState(mockFileContext)
+      const toolCall = createSpawnToolCall('codebuff/file_picker@1.0.0')
+
+      const { output } = await handleSpawnAgents({
+        ...handleSpawnAgentsBaseParams,
+        agentState: sessionState.mainAgentState,
+        agentTemplate: parentAgent,
+        localAgentTemplates: { 'codebuff/file-picker@1.0.0': childAgent },
+        toolCall,
+      })
+
+      expect(JSON.stringify(output)).toContain('Mock agent response')
+      expect(mockLoopAgentSteps).toHaveBeenCalledTimes(1)
+      expect(mockLoopAgentSteps.mock.calls[0][0].agentState.agentType).toBe(
+        'codebuff/file-picker@1.0.0',
+      )
     })
 
     it('should reject spawning when agent is not in spawnableAgents list', async () => {

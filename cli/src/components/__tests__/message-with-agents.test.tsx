@@ -3,13 +3,13 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import { initializeThemeStore } from '../../hooks/use-theme'
-import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 import { useChatStore } from '../../state/chat-store'
 import { useMessageBlockStore } from '../../state/message-block-store'
+import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 import { MessageWithAgents } from '../message-with-agents'
 
-import type { MarkdownPalette } from '../../utils/markdown-renderer'
 import type { ChatMessage } from '../../types/chat'
+import type { MarkdownPalette } from '../../utils/markdown-renderer'
 
 initializeThemeStore()
 
@@ -85,6 +85,7 @@ const defaultCallbacks = {
   onToggleCollapsed: () => {},
   onBuildFast: () => {},
   onBuildMax: () => {},
+  onBuildLite: () => {},
   onFeedback: () => {},
   onCloseFeedback: () => {},
 }
@@ -189,6 +190,7 @@ describe('MessageBlockStore', () => {
       const mockToggle = () => {}
       const mockBuildFast = () => {}
       const mockBuildMax = () => {}
+      const mockBuildFree = () => {}
       const mockFeedback = () => {}
       const mockCloseFeedback = () => {}
 
@@ -196,6 +198,7 @@ describe('MessageBlockStore', () => {
         onToggleCollapsed: mockToggle,
         onBuildFast: mockBuildFast,
         onBuildMax: mockBuildMax,
+        onBuildLite: mockBuildFree,
         onFeedback: mockFeedback,
         onCloseFeedback: mockCloseFeedback,
       })
@@ -204,6 +207,7 @@ describe('MessageBlockStore', () => {
       expect(state.callbacks.onToggleCollapsed).toBe(mockToggle)
       expect(state.callbacks.onBuildFast).toBe(mockBuildFast)
       expect(state.callbacks.onBuildMax).toBe(mockBuildMax)
+      expect(state.callbacks.onBuildLite).toBe(mockBuildFree)
       expect(state.callbacks.onFeedback).toBe(mockFeedback)
       expect(state.callbacks.onCloseFeedback).toBe(mockCloseFeedback)
     })
@@ -246,6 +250,7 @@ describe('MessageBlockStore', () => {
         onToggleCollapsed: mockFn,
         onBuildFast: mockFn,
         onBuildMax: mockFn,
+        onBuildLite: mockFn,
         onFeedback: mockFn,
         onCloseFeedback: mockFn,
       })
@@ -256,6 +261,7 @@ describe('MessageBlockStore', () => {
       // Callbacks should be noop functions (not undefined)
       expect(typeof state.callbacks.onToggleCollapsed).toBe('function')
       expect(typeof state.callbacks.onBuildFast).toBe('function')
+      expect(typeof state.callbacks.onBuildLite).toBe('function')
       // They should not throw when called
       expect(() => state.callbacks.onToggleCollapsed('test-id')).not.toThrow()
     })
@@ -477,10 +483,10 @@ describe('callback invocation', () => {
     })
 
     const storedCallback = useMessageBlockStore.getState().callbacks.onFeedback
-    storedCallback('msg-123', { category: 'bug' })
+    storedCallback('msg-123', { category: 'app_bug' })
 
     expect(feedbackMessageId).toBe('msg-123')
-    expect(feedbackOptions).toEqual({ category: 'bug' })
+    expect(feedbackOptions).toEqual({ category: 'app_bug' })
   })
 })
 

@@ -5,7 +5,7 @@ import path from 'path'
 import {
   clearMockedModules,
   mockModule,
-} from '@codebuff/common/testing/mock-modules'
+} from '@khiwniti/common/testing/mock-modules'
 import {
   describe,
   test,
@@ -16,9 +16,9 @@ import {
   spyOn,
 } from 'bun:test'
 
+import { setProjectRoot } from '../../project-files'
 import * as authModule from '../../utils/auth'
 import { saveUserCredentials, getUserCredentials } from '../../utils/auth'
-import { setProjectRoot } from '../../project-files'
 
 import type { User } from '../../utils/auth'
 
@@ -162,7 +162,7 @@ describe('Credentials Storage Integration', () => {
       // Restore getConfigDir to use real implementation for this test
       mock.restore()
 
-      await mockModule('@codebuff/common/env', () => ({
+      await mockModule('@khiwniti/common/env', () => ({
         env: { NEXT_PUBLIC_CB_ENVIRONMENT: 'test' },
       }))
 
@@ -177,7 +177,7 @@ describe('Credentials Storage Integration', () => {
       // Restore getConfigDir to use real implementation for this test
       mock.restore()
 
-      await mockModule('@codebuff/common/env', () => ({
+      await mockModule('@khiwniti/common/env', () => ({
         env: { NEXT_PUBLIC_CB_ENVIRONMENT: 'dev' },
       }))
 
@@ -193,7 +193,7 @@ describe('Credentials Storage Integration', () => {
       mock.restore()
 
       // Set environment to prod (or unset it)
-      await mockModule('@codebuff/common/env', () => ({
+      await mockModule('@khiwniti/common/env', () => ({
         env: { NEXT_PUBLIC_CB_ENVIRONMENT: 'prod' },
       }))
 

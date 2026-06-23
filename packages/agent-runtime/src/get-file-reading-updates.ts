@@ -1,6 +1,6 @@
 import { uniq } from 'lodash'
 
-import type { RequestFilesFn } from '@codebuff/common/types/contracts/client'
+import type { RequestFilesFn } from '@khiwniti/common/types/contracts/client'
 
 export async function getFileReadingUpdates(params: {
   requestFiles: RequestFilesFn
@@ -16,13 +16,11 @@ export async function getFileReadingUpdates(params: {
   const allFilePaths = uniq(requestedFiles)
   const loadedFiles = await requestFiles({ filePaths: allFilePaths })
 
-  const addedFiles = allFilePaths
-    .filter(
-      (path) => loadedFiles[path] != null && loadedFiles[path] !== undefined,
-    )
-    .map((path) => ({
+  const addedFiles = Object.entries(loadedFiles)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .map(([path, content]) => ({
       path,
-      content: loadedFiles[path]!,
+      content,
     }))
 
   return addedFiles

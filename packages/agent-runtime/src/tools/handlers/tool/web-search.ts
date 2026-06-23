@@ -1,4 +1,4 @@
-import { jsonToolResult } from '@codebuff/common/util/messages'
+import { jsonToolResult } from '@khiwniti/common/util/messages'
 
 import { callWebSearchAPI } from '../../../llm-api/codebuff-web-api'
 
@@ -6,9 +6,9 @@ import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { ClientEnv, CiEnv } from '@codebuff/common/types/contracts/env'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+} from '@khiwniti/common/tools/list'
+import type { ClientEnv, CiEnv } from '@khiwniti/common/types/contracts/env'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 
 export const handleWebSearch = (async (params: {
   previousToolCallFinished: Promise<void>

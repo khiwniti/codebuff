@@ -1,9 +1,9 @@
 import { AssertionError } from 'assert'
 
-import { buildArray } from '@codebuff/common/util/array'
-import { getErrorObject } from '@codebuff/common/util/error'
-import { systemMessage, userMessage } from '@codebuff/common/util/messages'
-import { closeXml } from '@codebuff/common/util/xml'
+import { buildArray } from '@khiwniti/common/util/array'
+import { getErrorObject } from '@khiwniti/common/util/error'
+import { systemMessage, userMessage } from '@khiwniti/common/util/messages'
+import { closeXml } from '@khiwniti/common/util/xml'
 import { cloneDeep, isEqual } from 'lodash'
 
 import { simplifyTerminalCommandResults } from './simplify-tool-results'
@@ -13,13 +13,13 @@ import type { System } from '../llm-api/claude'
 import type {
   CodebuffToolMessage,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { Message } from '@codebuff/common/types/messages/codebuff-message'
+} from '@khiwniti/common/tools/list'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { Message } from '@khiwniti/common/types/messages/codebuff-message'
 import type {
   TextPart,
   ImagePart,
-} from '@codebuff/common/types/messages/content-part'
+} from '@khiwniti/common/types/messages/content-part'
 
 export function messagesWithSystem(params: {
   messages: Message[]
@@ -91,29 +91,6 @@ export function buildUserMessageContent(
       text: asUserMessage(textParts.join('\n\n')),
     },
   ]
-}
-
-export function getCancelledAdditionalMessages(args: {
-  prompt: string | undefined
-  params: Record<string, any> | undefined
-  content?: Array<TextPart | ImagePart>
-  pendingAgentResponse: string
-  systemMessage: string
-}): Message[] {
-  const { prompt, params, content, pendingAgentResponse, systemMessage } = args
-
-  const messages: Message[] = [
-    {
-      role: 'user',
-      content: buildUserMessageContent(prompt, params, content),
-      tags: ['USER_PROMPT'],
-    },
-    userMessage(
-      `<previous_assistant_message>${pendingAgentResponse}</previous_assistant_message>\n\n${withSystemTags(systemMessage)}`,
-    ),
-  ]
-
-  return messages
 }
 
 export function parseUserMessage(str: string): string | undefined {
@@ -247,8 +224,9 @@ export function trimMessagesToFitTokenLimit(params: {
       shortenedMessages.push(terminalResultMessage)
     } else {
       m satisfies never
-      const mAny = m as any
-      throw new AssertionError({ message: `Not a valid role: ${mAny.role}` })
+      throw new AssertionError({
+        message: `Not a valid role: ${(m as { role: unknown }).role}`,
+      })
     }
   }
   shortenedMessages.reverse()

@@ -1,19 +1,24 @@
 import { globalStopSequence } from './constants'
 
 import type { AgentTemplate } from './templates/types'
-import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
-import type { SendActionFn } from '@codebuff/common/types/contracts/client'
-import type { PromptAiSdkStreamFn } from '@codebuff/common/types/contracts/llm'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsOf } from '@codebuff/common/types/function-params'
-import type { Message } from '@codebuff/common/types/messages/codebuff-message'
-import type { OpenRouterProviderOptions } from '@codebuff/internal/openrouter-ai-sdk'
+import type { TrackEventFn } from '@khiwniti/common/types/contracts/analytics'
+import type { SendActionFn } from '@khiwniti/common/types/contracts/client'
+import type {
+  CacheDebugUsageData,
+  PromptAiSdkStreamFn,
+} from '@khiwniti/common/types/contracts/llm'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsOf } from '@khiwniti/common/types/function-params'
+import type { Message } from '@khiwniti/common/types/messages/codebuff-message'
+import type { OpenRouterProviderOptions } from '@khiwniti/common/types/agent-template'
 import type { ToolSet } from 'ai'
 
 export const getAgentStreamFromTemplate = (params: {
   agentId?: string
   apiKey: string
   clientSessionId: string
+  costMode?: string
+  extraCodebuffMetadata?: Record<string, string>
   fingerprintId: string
   includeCacheControl?: boolean
   localAgentTemplates: Record<string, AgentTemplate>
@@ -25,6 +30,13 @@ export const getAgentStreamFromTemplate = (params: {
   tools: ToolSet
   userId: string | undefined
   userInputId: string
+  cacheDebugCorrelation?: string
+  onCacheDebugProviderRequestBuilt?: (params: {
+    provider: string
+    rawBody: unknown
+    normalizedBody?: unknown
+  }) => void
+  onCacheDebugUsageReceived?: (usage: CacheDebugUsageData) => void
 
   onCostCalculated?: (credits: number) => Promise<void>
   promptAiSdkStream: PromptAiSdkStreamFn
@@ -35,6 +47,8 @@ export const getAgentStreamFromTemplate = (params: {
     agentId,
     apiKey,
     clientSessionId,
+    costMode,
+    extraCodebuffMetadata,
     fingerprintId,
     includeCacheControl,
     localAgentTemplates,
@@ -45,6 +59,9 @@ export const getAgentStreamFromTemplate = (params: {
     tools,
     userId,
     userInputId,
+    cacheDebugCorrelation,
+    onCacheDebugProviderRequestBuilt,
+    onCacheDebugUsageReceived,
 
     sendAction,
     onCostCalculated,
@@ -62,11 +79,13 @@ export const getAgentStreamFromTemplate = (params: {
     agentId,
     apiKey,
     clientSessionId,
+    costMode,
+    extraCodebuffMetadata,
     fingerprintId,
     includeCacheControl,
     logger,
     localAgentTemplates,
-    maxOutputTokens: 32_000,
+    maxOutputTokens: undefined,
     maxRetries: 3,
     messages,
     model,
@@ -77,6 +96,9 @@ export const getAgentStreamFromTemplate = (params: {
     tools,
     userId,
     userInputId,
+    cacheDebugCorrelation,
+    onCacheDebugProviderRequestBuilt,
+    onCacheDebugUsageReceived,
 
     onCostCalculated,
     sendAction,

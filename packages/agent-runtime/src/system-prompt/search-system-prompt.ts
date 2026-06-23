@@ -1,15 +1,14 @@
-import { countTokens, countTokensJson } from '../util/token-counter'
-import { insertTrace } from '@codebuff/bigquery'
-import { buildArray } from '@codebuff/common/util/array'
+import { buildArray } from '@khiwniti/common/util/array'
 
 import {
   getGitChangesPrompt,
   getProjectFileTreePrompt,
   getSystemInfoPrompt,
 } from './prompts'
+import { countTokens, countTokensJson } from '../util/token-counter'
 
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 
 export function getSearchSystemPrompt(params: {
   fileContext: ProjectFileContext
@@ -23,8 +22,8 @@ export function getSearchSystemPrompt(params: {
     userId: string | undefined
   }
 }): string {
-  const { fileContext, messagesTokens, logger, options } = params
-  const startTime = Date.now()
+  const { fileContext, messagesTokens, logger, options: _options } = params
+  const _startTime = Date.now()
 
   const maxTokens = 500_000 // costMode === 'lite' ? 64_000 :
   const maxFilesTokens = 100_000
@@ -49,9 +48,9 @@ export function getSearchSystemPrompt(params: {
     logger,
   })
 
-  const t = Date.now()
+  const _t = Date.now()
   const truncationBudgets = [5_000, 20_000, 40_000, 100_000, 500_000]
-  const truncatedTrees = truncationBudgets.reduce(
+  const _truncatedTrees = truncationBudgets.reduce(
     (acc, budget) => {
       acc[budget] = getProjectFileTreePrompt({
         fileContext,
@@ -63,28 +62,10 @@ export function getSearchSystemPrompt(params: {
     },
     {} as Record<number, string>,
   )
-
-  const trace = {
-    id: crypto.randomUUID(),
-    agent_step_id: options.agentStepId,
-    created_at: new Date(),
-    type: 'file-trees' as const,
-    user_id: options.userId ?? '',
-    payload: {
-      filetrees: truncatedTrees,
-      user_input_id: options.userInputId,
-      client_session_id: options.clientSessionId,
-      fingerprint_id: options.fingerprintId,
-    },
-  }
-
-  insertTrace({ trace, logger }).catch((error: Error) => {
-    logger.error({ error }, 'Failed to insert file trees trace')
-  })
-  const fileTreeTokens = countTokensJson(projectFileTreePrompt)
+  const _fileTreeTokens = countTokensJson(projectFileTreePrompt)
 
   const systemInfoPrompt = getSystemInfoPrompt(fileContext)
-  const systemInfoTokens = countTokens(systemInfoPrompt)
+  const _systemInfoTokens = countTokens(systemInfoPrompt)
 
   const systemPrompt = buildArray([
     projectFileTreePrompt,

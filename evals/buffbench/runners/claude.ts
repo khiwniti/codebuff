@@ -4,7 +4,7 @@ import type { Runner, RunnerResult, AgentStep } from './runner'
 import type {
   PrintModeToolCall,
   PrintModeToolResult,
-} from '@codebuff/common/types/print-mode'
+} from '@khiwniti/common/types/print-mode'
 
 export class ClaudeRunner implements Runner {
   private cwd: string
@@ -46,7 +46,7 @@ export class ClaudeRunner implements Runner {
         stdio: ['ignore', 'pipe', 'pipe'],
       })
 
-      let stdout = ''
+      let _stdout = ''
       let stderr = ''
       let responseText = ''
       let toolCalls: PrintModeToolCall[] = []
@@ -69,7 +69,7 @@ export class ClaudeRunner implements Runner {
 
       child.stdout.on('data', (data: Buffer) => {
         const chunk = data.toString()
-        stdout += chunk
+        _stdout += chunk
 
         // Parse streaming JSON output from Claude CLI
         const lines = chunk.split('\n').filter((line) => line.trim())

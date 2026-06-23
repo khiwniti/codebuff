@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { spawnSync, type SpawnSyncOptions } from 'child_process'
+import { createRequire } from 'module'
 import {
   chmodSync,
   existsSync,
@@ -27,6 +28,8 @@ const OVERRIDE_PLATFORM = process.env.OVERRIDE_PLATFORM as
   | NodeJS.Platform
   | undefined
 const OVERRIDE_ARCH = process.env.OVERRIDE_ARCH ?? undefined
+const OVERRIDE_COMPILE_EXECUTABLE_PATH =
+  process.env.BUN_COMPILE_EXECUTABLE_PATH
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -110,6 +113,13 @@ function getTargetInfo(): TargetInfo {
   return target
 }
 
+function getCliTargetLabel(targetInfo: TargetInfo): string {
+  const baseTarget = `${targetInfo.platform}-${targetInfo.arch}`
+  return targetInfo.bunTarget.endsWith('-baseline')
+    ? `${baseTarget}-baseline`
+    : baseTarget
+}
+
 async function main() {
   const [, , binaryNameArg, version] = process.argv
   const binaryName = binaryNameArg ?? 'codecane'
@@ -159,8 +169,9 @@ async function main() {
     ['process.env.CODEBUFF_CLI_VERSION', `"${version}"`],
     [
       'process.env.CODEBUFF_CLI_TARGET',
-      `"${targetInfo.platform}-${targetInfo.arch}"`,
+      `"${getCliTargetLabel(targetInfo)}"`,
     ],
+    ['process.env.FREEBUFF_MODE', `"${process.env.FREEBUFF_MODE ?? 'false'}"`],
     ...nextPublicEnvVars,
   ]
 
@@ -169,7 +180,11 @@ async function main() {
     'src/index.tsx',
     '--compile',
     '--production', // Required so compiled binaries use the production JSX runtime (avoids jsxDEV crashes).
+    '--no-compile-autoload-bunfig', // User project bunfig.toml must not affect the standalone CLI.
     `--target=${targetInfo.bunTarget}`,
+    ...(OVERRIDE_COMPILE_EXECUTABLE_PATH
+      ? [`--compile-executable-path=${OVERRIDE_COMPILE_EXECUTABLE_PATH}`]
+      : []),
     `--outfile=${outputFile}`,
     '--sourcemap=none',
     ...defineFlags.flatMap(([key, value]) => ['--define', `${key}=${value}`]),
@@ -184,12 +199,25 @@ async function main() {
 
   runCommand('bun', buildArgs, { cwd: cliRoot })
 
+  // Ship tree-sitter.wasm as a sibling file next to the binary. Bun
+  // --compile asset embedding is unreliable on Windows (every JS-level
+  // retrieval mechanism we tried — `with { type: 'file' }`, base64 string
+  // literals, chunked base64, function-wrapped chunked base64 — got
+  // tree-shaken, minified away, or returned an undefined binding even
+  // when the bytes were in the binary). The pre-init reads it from
+  // `dirname(process.execPath)`, which works the same on every platform
+  // because it's a normal disk read, not a bunfs lookup.
+  const sourceWasm = findWebTreeSitterWasm()
+  const siblingWasm = join(binDir, 'tree-sitter.wasm')
+  writeFileSync(siblingWasm, readFileSync(sourceWasm))
+  logAlways(`Copied tree-sitter.wasm sibling: ${sourceWasm} → ${siblingWasm}`)
+
   if (targetInfo.platform !== 'win32') {
     chmodSync(outputFile, 0o755)
   }
 
   logAlways(
-    `✅ Built ${outputFilename} (${targetInfo.platform}-${targetInfo.arch})`,
+    `✅ Built ${outputFilename} (${getCliTargetLabel(targetInfo)})`,
   )
 }
 
@@ -201,6 +229,32 @@ main().catch((error: unknown) => {
   }
   process.exit(1)
 })
+
+/**
+ * Find web-tree-sitter's tree-sitter.wasm in any plausible node_modules
+ * layout — bun hoists differently across platforms and `bun install`
+ * variants, and CI Windows lays it out differently than monorepo-root
+ * installs.
+ */
+function findWebTreeSitterWasm(): string {
+  const candidates = [
+    join(cliRoot, 'node_modules', 'web-tree-sitter', 'tree-sitter.wasm'),
+    join(cliRoot, '..', 'node_modules', 'web-tree-sitter', 'tree-sitter.wasm'),
+    join(cliRoot, '..', 'sdk', 'node_modules', 'web-tree-sitter', 'tree-sitter.wasm'),
+  ]
+  const found = candidates.find((p) => existsSync(p))
+  if (found) return found
+  try {
+    const cliRequire = createRequire(join(cliRoot, 'package.json'))
+    return cliRequire.resolve('web-tree-sitter/tree-sitter.wasm')
+  } catch (err) {
+    throw new Error(
+      `Could not locate web-tree-sitter/tree-sitter.wasm. Searched:\n  - ` +
+        candidates.join('\n  - ') +
+        `\nAnd createRequire failed: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+}
 
 function patchOpenTuiAssetPaths() {
   const coreDir = join(cliRoot, 'node_modules', '@opentui', 'core')

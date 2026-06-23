@@ -2,8 +2,15 @@ import { appendFileSync, existsSync, mkdirSync, unlinkSync } from 'fs'
 import path, { dirname } from 'path'
 import { format as stringFormat } from 'util'
 
-import { env, IS_DEV, IS_TEST, IS_CI } from '@codebuff/common/env'
-import { createAnalyticsDispatcher } from '@codebuff/common/util/analytics-dispatcher'
+
+import { AnalyticsEvent } from '@khiwniti/common/constants/analytics-events'
+import { env, IS_DEV, IS_TEST, IS_CI } from '@khiwniti/common/env'
+import { createAnalyticsDispatcher } from '@khiwniti/common/util/analytics-dispatcher'
+import { getAnalyticsEventId } from '@khiwniti/common/util/analytics-log'
+import {
+  isFullTelemetryEnabled,
+  summarizeAnalyticsValue,
+} from '@khiwniti/common/util/analytics-sampling'
 import { pino } from 'pino'
 
 import {
@@ -12,7 +19,13 @@ import {
   setAnalyticsErrorLogger,
   trackEvent,
 } from './analytics'
+import { enqueueClientLog } from './log-shipper'
 import { getCurrentChatDir, getProjectRoot } from '../project-files'
+
+import type { LogRecordInput } from '@khiwniti/common/schemas/logs'
+
+/** Name of the per-chat debug log file written in production builds */
+export const CHAT_LOG_FILENAME = 'log.jsonl'
 
 export interface LoggerContext {
   userId?: string
@@ -34,6 +47,23 @@ const analyticsDispatcher = createAnalyticsDispatcher({
   envName: env.NEXT_PUBLIC_CB_ENVIRONMENT,
   bufferWhenNoUser: true,
 })
+
+/**
+ * Safely stringify an object, handling circular references.
+ * Replaces circular references with '[Circular]' placeholder.
+ */
+function safeStringify(obj: unknown): string {
+  const seen = new WeakSet()
+  return JSON.stringify(obj, (_key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) {
+        return '[Circular]'
+      }
+      seen.add(value)
+    }
+    return value
+  })
+}
 
 function isEmptyObject(value: any): boolean {
   return (
@@ -73,13 +103,14 @@ function setLogPath(p: string): void {
 
 export function clearLogFile(): void {
   const projectRoot = getProjectRoot()
-  const defaultLog = path.join(projectRoot, 'debug', 'cli.jsonl')
+  const debugDir = path.join(projectRoot, 'debug')
   const targets = new Set<string>()
 
   if (logPath) {
     targets.add(logPath)
   }
-  targets.add(defaultLog)
+  targets.add(path.join(debugDir, 'cli.jsonl'))
+  targets.add(path.join(debugDir, 'trace.jsonl'))
 
   for (const target of targets) {
     try {
@@ -112,7 +143,7 @@ function sendAnalyticsAndLog(
       const logTarget =
         IS_DEV
           ? path.join(projectRoot, 'debug', 'cli.jsonl')
-          : path.join(getCurrentChatDir(), 'log.jsonl')
+          : path.join(getCurrentChatDir(), CHAT_LOG_FILENAME)
 
       setLogPath(logTarget)
     }
@@ -145,10 +176,71 @@ function sendAnalyticsAndLog(
     })
   }
 
+  // Send all log events to PostHog in production for better observability
+  // Skip if the log already has an eventId (to avoid duplicate tracking)
+  const hasEventId = includeData && getAnalyticsEventId(normalizedData) !== null
+  if (!IS_DEV && !IS_TEST && !IS_CI && !hasEventId) {
+    const fullTelemetry = isFullTelemetryEnabled({
+      distinctId: loggerContext.userId,
+      properties: loggerContext,
+    })
+    const includeRawData =
+      fullTelemetry || level === 'error' || level === 'fatal'
+    const dataProperties =
+      includeData && includeRawData
+        ? { data: normalizedData }
+        : includeData
+          ? { dataSummary: summarizeAnalyticsValue(normalizedData) }
+          : {}
+
+    trackEvent(AnalyticsEvent.CLI_LOG, {
+      level,
+      msg: stringFormat(normalizedMsg ?? '', ...args),
+      ...dataProperties,
+      ...loggerContext,
+    })
+  }
+
+  // Mirror the log/event into the server-side Axiom logs sink via /api/logs
+  // (in addition to PostHog). Best-effort and batched; skip noisy debug logs
+  // and anything before we know who the user is.
+  if (!IS_DEV && !IS_TEST && !IS_CI && loggerContext.userId && level !== 'debug') {
+    const eventId =
+      includeData && typeof normalizedData === 'object'
+        ? getAnalyticsEventId(normalizedData)
+        : null
+    // Mirror the PostHog path's redaction: only ship raw payloads for errors or
+    // when full telemetry is enabled; otherwise ship a summary. Keeps PII/data
+    // volume symmetric across the two sinks.
+    const includeRawData =
+      isFullTelemetryEnabled({
+        distinctId: loggerContext.userId,
+        properties: loggerContext,
+      }) ||
+      level === 'error' ||
+      level === 'fatal'
+    const shipData = includeData
+      ? includeRawData
+        ? normalizedData
+        : summarizeAnalyticsValue(normalizedData)
+      : undefined
+    const record: LogRecordInput = {
+      timestamp: new Date().toISOString(),
+      level,
+      event: eventId ? String(eventId) : undefined,
+      message: stringFormat(normalizedMsg ?? '', ...args),
+      client_session_id: loggerContext.clientSessionId,
+      client_request_id: loggerContext.clientRequestId,
+      fingerprint_id: loggerContext.fingerprintId,
+      data: shipData,
+    }
+    enqueueClientLog(record)
+  }
+
   // In dev mode, use appendFileSync for real-time logging (Bun has issues with pino sync)
   // In prod mode, use pino for better performance
   if (IS_DEV && logPath) {
-    const logEntry = JSON.stringify({
+    const logEntry = safeStringify({
       level: level.toUpperCase(),
       timestamp: new Date().toISOString(),
       ...loggerContext,

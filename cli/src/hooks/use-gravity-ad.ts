@@ -1,16 +1,24 @@
-import { Message, WEBSITE_URL } from '@codebuff/sdk'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { WEBSITE_URL } from '@khiwniti/sdk'
+import { useEffect, useRef, useState } from 'react'
 
+import { useTerminalLayout } from './use-terminal-layout'
 import { getAdsEnabled } from '../commands/ads'
 import { useChatStore } from '../state/chat-store'
-import { subscribeToActivity } from '../utils/activity-tracker'
+import { isUserActive, subscribeToActivity } from '../utils/activity-tracker'
 import { getAuthToken } from '../utils/auth'
+import { IS_FREEBUFF } from '../utils/constants'
+import { getCliEnv } from '../utils/env'
 import { logger } from '../utils/logger'
 
-const AD_ROTATION_INTERVAL_MS = 60 * 1000 // 60 seconds per ad
-const MAX_ADS_AFTER_ACTIVITY = 3 // Show up to 3 ads after last activity, then stop
+import type { Message } from '@khiwniti/sdk'
 
-// Ad response type (matches Gravity API response, credits added after impression)
+const AD_ROTATION_INTERVAL_MS = 60 * 1000 // 60 seconds per ad
+const MAX_ADS_AFTER_ACTIVITY = 3 // Show up to 3 ads after last activity, then pause fetching new ads
+const ACTIVITY_THRESHOLD_MS = 30_000 // 30 seconds idle threshold for fetching new ads
+const MAX_AD_CACHE_SIZE = 50 // Maximum number of ads to keep in cache
+const ZEROCLICK_IMPRESSIONS_URL = 'https://zeroclick.dev/api/v2/impressions'
+
+// Ad response type (normalized shape across providers; credits added after impression)
 export type AdResponse = {
   adText: string
   title: string
@@ -19,12 +27,53 @@ export type AdResponse = {
   favicon: string
   clickUrl: string
   impUrl: string
+  provider?: AdProvider
+  impressionIds?: string[]
   credits?: number // Set after impression is recorded (in cents)
 }
 
+/**
+ * Which upstream ad network to query. The server maps each provider onto the
+ * same normalized response shape, so the rest of the hook is provider-agnostic.
+ */
+export type AdProvider = 'gravity' | 'carbon' | 'zeroclick'
+export type AdSurface = 'waiting_room'
+
 export type GravityAdState = {
-  ad: AdResponse | null
+  ads: AdResponse[] | null
   isLoading: boolean
+  recordClick: (ad: AdResponse) => void
+  recordImpression: (ad: AdResponse) => void
+}
+
+// Consolidated controller state for the ad rotation logic
+type GravityController = {
+  choiceCache: AdResponse[][] // Cache of ad sets (choice or single-ad units)
+  choiceCacheIndex: number
+  impressionsFired: Set<string>
+  adsShownSinceActivity: number
+  tickInFlight: boolean
+}
+
+// Pure helper: add an ad set to the cache
+function addToChoiceCache(ctrl: GravityController, ads: AdResponse[]): void {
+  // ZeroClick offer responses must not be stored for later display. Keep them
+  // out of the rotation cache and only render them for the live request.
+  if (ads.some((ad) => ad.provider === 'zeroclick')) return
+
+  // Deduplicate by checking if any set has the same first impUrl
+  const key = ads[0]?.impUrl
+  if (key && ctrl.choiceCache.some((set) => set[0]?.impUrl === key)) return
+  if (ctrl.choiceCache.length >= MAX_AD_CACHE_SIZE) ctrl.choiceCache.shift()
+  ctrl.choiceCache.push(ads)
+}
+
+// Pure helper: get the next cached ad set
+function nextFromChoiceCache(ctrl: GravityController): AdResponse[] | null {
+  if (ctrl.choiceCache.length === 0) return null
+  const set = ctrl.choiceCache[ctrl.choiceCacheIndex % ctrl.choiceCache.length]!
+  ctrl.choiceCacheIndex = (ctrl.choiceCacheIndex + 1) % ctrl.choiceCache.length
+  return set
 }
 
 /**
@@ -33,81 +82,193 @@ export type GravityAdState = {
  * Behavior:
  * - Ads only start after the user sends their first message
  * - Ads rotate every 60 seconds
- * - After 3 ads without user activity, rotation stops
- * - Any user activity resets the counter and resumes rotation
+ * - After 3 ads without user activity, stops fetching new ads but continues cycling cached ads
+ * - Any user activity resets the counter and resumes fetching new ads
  *
  * Activity is tracked via the global activity-tracker module.
  */
-export const useGravityAd = (): GravityAdState => {
-  const [ad, setAd] = useState<AdResponse | null>(null)
+export const useGravityAd = (options?: {
+  enabled?: boolean
+  /** Skip the "wait for first user message" gate. Used by the freebuff
+   *  waiting room, which has no conversation but still needs ads. */
+  forceStart?: boolean
+  /** Ad network to request first. The server owns fallback ordering. */
+  provider?: AdProvider
+  /** Product surface requesting the ad. The server maps this to placements. */
+  surface?: AdSurface
+}): GravityAdState => {
+  const enabled = options?.enabled ?? true
+  const forceStart = options?.forceStart ?? false
+  const provider: AdProvider = options?.provider ?? 'gravity'
+  const surface = options?.surface
+  const [ads, setAds] = useState<AdResponse[] | null>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [isActive, setIsActive] = useState(false)
-  const impressionFiredRef = useRef<Set<string>>(new Set())
 
-  // Counter: how many ads shown since last user activity
-  const adsShownRef = useRef<number>(0)
+  // Check if terminal height is too small to show ads
+  const { terminalHeight } = useTerminalLayout()
+  const isVeryCompactHeight = terminalHeight <= 17
 
-  // Is rotation currently paused (shown 3 ads without activity)?
-  const isPausedRef = useRef<boolean>(false)
+  // Freebuff always shows ads even on compact screens (ads are mandatory there).
+  const isFreeMode = IS_FREEBUFF
 
-  // Rotation timer
-  const rotationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Skip ads on very compact screens unless we're in Freebuff (where ads are mandatory)
+  // Also skip if explicitly disabled (e.g. user has a subscription)
+  const shouldHideAds = !enabled || (isVeryCompactHeight && !isFreeMode)
 
-  // Fire impression via web API when ad changes (grants credits)
-  useEffect(() => {
-    if (isActive && ad?.impUrl && !impressionFiredRef.current.has(ad.impUrl)) {
-      const currentImpUrl = ad.impUrl
-      impressionFiredRef.current.add(currentImpUrl)
+  // Use Zustand selector instead of manual subscription - only rerenders when value changes
+  const hasUserMessagedStore = useChatStore((s) =>
+    s.messages.some((m) => m.variant === 'user'),
+  )
+  // forceStart lets callers (e.g. the waiting room) opt out of the
+  // "wait for the first user message" gate.
+  const shouldStart = forceStart || hasUserMessagedStore
+
+  // Single consolidated controller ref
+  const ctrlRef = useRef<GravityController>({
+    choiceCache: [],
+    choiceCacheIndex: 0,
+    impressionsFired: new Set(),
+    adsShownSinceActivity: 0,
+    tickInFlight: false,
+  })
+
+  // Ref for the tick function (avoids useCallback dependency issues)
+  const tickRef = useRef<() => void>(() => {})
+
+  // Ref to track whether ads should be hidden for use in async code
+  const shouldHideAdsRef = useRef(shouldHideAds)
+  shouldHideAdsRef.current = shouldHideAds
+
+  // Fire impression and update credits (called when showing an ad)
+  const recordImpressionOnce = (ad: AdResponse): void => {
+    // Don't record impressions when ads should be hidden
+    if (shouldHideAdsRef.current) return
+
+    const ctrl = ctrlRef.current
+    const { impUrl } = ad
+    if (ctrl.impressionsFired.has(impUrl)) return
+    ctrl.impressionsFired.add(impUrl)
+
+    const recordLocalImpression = async (): Promise<void> => {
       const authToken = getAuthToken()
       if (!authToken) {
-        logger.warn('[gravity] No auth token, skipping impression recording')
+        logger.warn('[ads] No auth token, skipping local impression recording')
         return
       }
 
-      fetch(`${WEBSITE_URL}/api/v1/ads/impression`, {
+      // Include mode in request - Freebuff should not grant credits (no balance concept).
+      const agentMode = useChatStore.getState().agentMode
+
+      const res = await fetch(`${WEBSITE_URL}/api/v1/ads/impression`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${authToken}`,
+          'User-Agent': getCliAdRequestUserAgent(),
         },
         body: JSON.stringify({
-          impUrl: currentImpUrl,
+          impUrl,
+          mode: agentMode,
         }),
       })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.creditsGranted > 0) {
-            logger.info(
-              { creditsGranted: data.creditsGranted },
-              '[gravity] Ad impression credits granted',
-            )
-            setAd((currentAd) =>
-              currentAd?.impUrl === currentImpUrl
-                ? { ...currentAd, credits: data.creditsGranted }
-                : currentAd,
-            )
-          }
-        })
-        .catch((err) => {
-          logger.debug({ err }, '[gravity] Failed to record ad impression')
-        })
-    }
-  }, [ad, isActive])
 
-  const clearTimer = useCallback(() => {
-    if (rotationTimerRef.current) {
-      clearTimeout(rotationTimerRef.current)
-      rotationTimerRef.current = null
+      if (!res.ok) {
+        logger.debug(
+          { status: res.status },
+          '[ads] Failed to record local ad impression',
+        )
+        return
+      }
+
+      const data = await res.json()
+      if (data.creditsGranted > 0) {
+        logger.info(
+          { creditsGranted: data.creditsGranted },
+          '[ads] Ad impression credits granted',
+        )
+        // Also update credits in visible ads
+        setAds((cur) => {
+          if (!cur) return cur
+          return cur.map((a) =>
+            a.impUrl === impUrl ? { ...a, credits: data.creditsGranted } : a,
+          )
+        })
+      }
     }
-  }, [])
+
+    if (ad.provider === 'zeroclick' && ad.impressionIds?.length) {
+      void (async () => {
+        try {
+          const res = await fetch(ZEROCLICK_IMPRESSIONS_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: ad.impressionIds }),
+          })
+
+          if (!res.ok) {
+            logger.debug(
+              { status: res.status },
+              '[ads] Failed to record ZeroClick impression',
+            )
+            return
+          }
+        } catch (err) {
+          logger.debug({ err }, '[ads] Failed to record ZeroClick impression')
+          return
+        }
+
+        recordLocalImpression().catch((err) => {
+          logger.debug({ err }, '[ads] Failed to record local ad impression')
+        })
+      })()
+      return
+    }
+
+    recordLocalImpression().catch((err) => {
+      logger.debug({ err }, '[ads] Failed to record ad impression')
+    })
+  }
+
+  const recordClick = (ad: AdResponse): void => {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      logger.warn('[ads] No auth token, skipping ad click recording')
+      return
+    }
+
+    void fetch(`${WEBSITE_URL}/api/v1/ads/click`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`,
+        'User-Agent': getCliAdRequestUserAgent(),
+      },
+      body: JSON.stringify({ impUrl: ad.impUrl, surface: surface ?? 'chat' }),
+    })
+      .then((res) => {
+        if (!res.ok) {
+          logger.debug(
+            { status: res.status },
+            '[ads] Failed to record ad click',
+          )
+        }
+      })
+      .catch((err) => {
+        logger.debug({ err }, '[ads] Failed to record ad click')
+      })
+  }
+
+  type FetchAdResult = { ads: AdResponse[] } | null
 
   // Fetch an ad via web API
-  const fetchAd = useCallback(async (): Promise<AdResponse | null> => {
+  const fetchAd = async (): Promise<FetchAdResult> => {
+    // Don't fetch ads when they should be hidden
+    if (shouldHideAdsRef.current) return null
     if (!getAdsEnabled()) return null
 
     const authToken = getAuthToken()
     if (!authToken) {
-      logger.warn('[gravity] No auth token available')
+      logger.warn('[ads] No auth token available')
       return null
     }
 
@@ -147,135 +308,134 @@ export const useGravityAd = (): GravityAdState => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${authToken}`,
+          'User-Agent': getCliAdRequestUserAgent(),
         },
         body: JSON.stringify({
+          provider,
           messages: adMessages,
           sessionId: useChatStore.getState().chatSessionId,
           device: getDeviceInfo(),
+          ...(surface ? { surface } : {}),
+          // Carbon requires a real browser-ish useragent for targeting/fraud
+          // detection. Gravity ignores it. We source one centrally so every
+          // provider that needs it sees the same value.
+          userAgent: getAdUserAgent(),
         }),
       })
 
       if (!response.ok) {
+        let responseBody: unknown
+        try {
+          const contentType = response.headers.get('content-type') ?? ''
+          responseBody = contentType.includes('application/json')
+            ? await response.json()
+            : await response.text()
+        } catch {
+          responseBody = 'Unable to parse error response'
+        }
         logger.warn(
-          { status: response.status, response: await response.json() },
-          '[gravity] Web API returned error',
+          { provider, status: response.status, response: responseBody },
+          '[ads] Web API returned error',
         )
         return null
       }
 
       const data = await response.json()
-      const ad = data.ad as AdResponse | null
 
-      logger.info(
-        { ad, request: { messages: adMessages } },
-        '[gravity] Received ad response',
-      )
-      return ad
+      if (Array.isArray(data.ads) && data.ads.length > 0) {
+        return {
+          ads: (data.ads as AdResponse[]).map((ad) => ({
+            ...ad,
+            provider: data.provider ?? provider,
+          })),
+        }
+      }
     } catch (err) {
-      logger.error({ err }, '[gravity] Failed to fetch ad')
-      return null
-    }
-  }, [])
-
-  // Schedule ad rotation
-  const scheduleRotation = useCallback(() => {
-    clearTimer()
-
-    if (!getAdsEnabled() || isPausedRef.current) {
-      logger.debug(
-        { isPaused: isPausedRef.current },
-        '[gravity] Not scheduling rotation',
-      )
-      return
+      logger.error({ err, provider }, '[ads] Failed to fetch ad')
     }
 
-    rotationTimerRef.current = setTimeout(async () => {
-      adsShownRef.current += 1
+    return null
+  }
 
-      if (adsShownRef.current >= MAX_ADS_AFTER_ACTIVITY) {
-        isPausedRef.current = true
-        return
+  // Update tick function (uses ref to avoid useCallback dependency issues)
+  tickRef.current = () => {
+    void (async () => {
+      const ctrl = ctrlRef.current
+      if (ctrl.tickInFlight) return
+      ctrl.tickInFlight = true
+
+      try {
+        if (!getAdsEnabled()) return
+
+        // Derive "can fetch new ads" from counter and activity (no separate paused ref needed)
+        const canFetchNew =
+          ctrl.adsShownSinceActivity < MAX_ADS_AFTER_ACTIVITY &&
+          isUserActive(ACTIVITY_THRESHOLD_MS)
+
+        const result = canFetchNew ? await fetchAd() : null
+
+        if (result) {
+          addToChoiceCache(ctrl, result.ads)
+          ctrl.adsShownSinceActivity += 1
+          setAds(result.ads)
+        } else {
+          // Fall back to cached ads
+          const cachedSet = nextFromChoiceCache(ctrl)
+          if (cachedSet) {
+            ctrl.adsShownSinceActivity += 1
+            setAds(cachedSet)
+          } else {
+            setAds((cur) => (cur?.[0]?.provider === 'zeroclick' ? null : cur))
+          }
+        }
+      } finally {
+        ctrl.tickInFlight = false
       }
+    })()
+  }
 
-      const newAd = await fetchAd()
-      if (newAd) {
-        setAd(newAd)
-      }
-
-      scheduleRotation()
-    }, AD_ROTATION_INTERVAL_MS)
-  }, [clearTimer, fetchAd])
-
-  // Handle activity from the global activity tracker
-  const handleActivity = useCallback(() => {
-    const wasPaused = isPausedRef.current
-    adsShownRef.current = 0
-
-    if (wasPaused) {
-      isPausedRef.current = false
-      scheduleRotation()
-    }
-  }, [scheduleRotation])
-
-  // Subscribe to global activity tracker
+  // Reset ads shown counter on user activity
   useEffect(() => {
     if (!getAdsEnabled()) return
-
-    const unsubscribe = subscribeToActivity(handleActivity)
-    return unsubscribe
-  }, [handleActivity])
-
-  // Subscribe to UI messages to detect first user message
-  // We use UI messages (not runState.messageHistory) because UI messages
-  // update immediately when the user sends a message, allowing us to fetch
-  // ads sooner rather than waiting for the assistant to respond
-  useEffect(() => {
-    if (isActive || !getAdsEnabled()) {
-      return
-    }
-
-    // Check initial state
-    const initialMessages = useChatStore.getState().messages
-    if (initialMessages.some((msg) => msg.variant === 'user')) {
-      setIsActive(true)
-      return
-    }
-
-    const unsubscribe = useChatStore.subscribe((state) => {
-      const hasUserMessage = state.messages.some(
-        (msg) => msg.variant === 'user',
-      )
-
-      if (hasUserMessage) {
-        unsubscribe()
-        setIsActive(true)
-      }
+    return subscribeToActivity(() => {
+      ctrlRef.current.adsShownSinceActivity = 0
     })
+  }, [])
 
-    return unsubscribe
-  }, [isActive])
-
-  // Fetch first ad and start rotation when becoming active
+  // Start rotation when user sends first message (or immediately if forced).
   useEffect(() => {
-    if (!isActive) return
+    if (!shouldStart || !getAdsEnabled() || shouldHideAds) return
 
     setIsLoading(true)
-    fetchAd().then((firstAd) => {
-      if (firstAd) {
-        setAd(firstAd)
+
+    // Fetch first ad immediately
+    void (async () => {
+      const result = await fetchAd()
+      if (result) {
+        const ctrl = ctrlRef.current
+        addToChoiceCache(ctrl, result.ads)
+        setAds(result.ads)
+        ctrl.adsShownSinceActivity = 1
       }
-      // Always start rotation, even if first fetch returned null
-      scheduleRotation()
       setIsLoading(false)
-    })
-  }, [isActive, fetchAd, scheduleRotation])
+    })()
 
-  // Cleanup timer on unmount
-  useEffect(() => {
-    return () => clearTimer()
-  }, [clearTimer])
+    // Start interval for rotation (consistent 60s intervals)
+    const id = setInterval(() => tickRef.current(), AD_ROTATION_INTERVAL_MS)
 
-  return { ad: isActive ? ad : null, isLoading }
+    return () => {
+      clearInterval(id)
+    }
+  }, [shouldStart, shouldHideAds, provider, surface])
+
+  // Don't return ads when ads should be hidden
+  const visible = shouldStart && !shouldHideAds
+  return {
+    ads: visible ? ads : null,
+    isLoading,
+    recordClick,
+    recordImpression: recordImpressionOnce,
+  }
 }
 
 type AdMessage = { role: 'user' | 'assistant'; content: string }
@@ -331,4 +491,29 @@ function getDeviceInfo(): DeviceInfo {
   const locale = Intl.DateTimeFormat().resolvedOptions().locale
 
   return { os, timezone, locale }
+}
+
+/**
+ * Useragent string passed to ad providers. Carbon (BuySellAds) requires a
+ * plausible browser useragent for targeting and fraud screening. We send a
+ * stable desktop Chrome-on-{os} UA per platform so targeting is consistent
+ * across users on the same platform without sharing anything identifying.
+ *
+ * Chrome version needs bumping periodically — stale UAs look bot-ish to ad
+ * networks. Last bumped: 2026-04-21. Revisit roughly every 6 months.
+ */
+const AD_CHROME_VERSION = '124.0.0.0'
+function getAdUserAgent(): string {
+  const osUA: Record<string, string> = {
+    darwin: `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${AD_CHROME_VERSION} Safari/537.36`,
+    win32: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${AD_CHROME_VERSION} Safari/537.36`,
+    linux: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${AD_CHROME_VERSION} Safari/537.36`,
+  }
+  return osUA[process.platform] ?? osUA.linux
+}
+
+function getCliAdRequestUserAgent(): string {
+  const product = IS_FREEBUFF ? 'Freebuff-CLI' : 'Codebuff-CLI'
+  const version = getCliEnv().CODEBUFF_CLI_VERSION ?? 'dev'
+  return `${product}/${version}`
 }

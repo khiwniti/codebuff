@@ -1,4 +1,4 @@
-import { CodebuffClient } from '@codebuff/sdk'
+import { CodebuffClient } from '@khiwniti/sdk'
 
 async function main() {
   const client = new CodebuffClient({
@@ -20,7 +20,7 @@ async function main() {
   })
 
   // Continue the same session with a follow-up
-  const runOrError2 = await client.run({
+  const _runOrError2 = await client.run({
     agent: 'codebuff/base@0.0.16',
     prompt: 'Add unit tests for the calculator',
     previousRun: runState1, // <-- this is where your next run differs from the previous run

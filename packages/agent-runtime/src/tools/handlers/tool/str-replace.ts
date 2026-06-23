@@ -7,10 +7,10 @@ import type {
   ClientToolCall,
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { RequestOptionalFileFn } from '@codebuff/common/types/contracts/client'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
+} from '@khiwniti/common/tools/list'
+import type { RequestOptionalFileFn } from '@khiwniti/common/types/contracts/client'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
 
 export const handleStrReplace = (async (
   params: {

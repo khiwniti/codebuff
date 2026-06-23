@@ -16,10 +16,15 @@ export const createBestOfNImplementor = (options: {
     model: isSonnet
       ? 'anthropic/claude-sonnet-4.5'
       : isOpus
-        ? 'anthropic/claude-opus-4.5'
+        ? 'anthropic/claude-opus-4.8'
         : isGemini
           ? 'google/gemini-3-pro-preview'
           : 'openai/gpt-5.1',
+    ...(isOpus && {
+      providerOptions: {
+        only: ['amazon-bedrock'],
+      },
+    }),
     displayName: 'Implementation Generator',
     spawnerPrompt:
       'Generates a complete implementation using propose_* tools that draft changes without applying them',
@@ -42,16 +47,16 @@ IMPORTANT: Use propose_str_replace and propose_write_file tools to make your edi
 You can make multiple tool calls across multiple steps to complete the implementation. Only the file changes will be passed on, so you can say whatever you want to help you think. Do not write any final summary as that would be a waste of tokens because no one is reading it.
 <codebuff_tool_call>
 {
-  "cb_tool_name": "str_replace",
+  "cb_tool_name": "propose_str_replace",
   "path": "path/to/file",
   "replacements": [
     {
-      "old": "exact old code",
-      "new": "exact new code"
+      "oldString": "exact old code",
+      "newString": "exact new code"
     },
     {
-      "old": "exact old code 2",
-      "new": "exact new code 2"
+      "oldString": "exact old code 2",
+      "newString": "exact new code 2"
     },
   ]
 }
@@ -61,10 +66,10 @@ OR for new files or major rewrites:
 
 <codebuff_tool_call>
 {
-  "cb_tool_name": "write_file",
+  "cb_tool_name": "propose_write_file",
   "path": "path/to/file",
   "instructions": "What the change does",
-  "content": "Complete file content or edit snippet"
+  "content": "Complete file content"
 }
 </codebuff_tool_call>
 ${

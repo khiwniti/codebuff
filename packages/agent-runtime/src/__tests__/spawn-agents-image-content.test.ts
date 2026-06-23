@@ -1,10 +1,10 @@
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
 import {
   assistantMessage,
   userMessage,
-} from '@codebuff/common/util/messages'
+} from '@khiwniti/common/util/messages'
 import {
   describe,
   expect,
@@ -20,10 +20,10 @@ import * as runAgentStep from '../run-agent-step'
 import { handleSpawnAgentInline } from '../tools/handlers/tool/spawn-agent-inline'
 import { handleSpawnAgents } from '../tools/handlers/tool/spawn-agents'
 
-import type { CodebuffToolCall } from '@codebuff/common/tools/list'
-import type { AgentTemplate } from '@codebuff/common/types/agent-template'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { ImagePart, TextPart } from '@codebuff/common/types/messages/content-part'
+import type { CodebuffToolCall } from '@khiwniti/common/tools/list'
+import type { AgentTemplate } from '@khiwniti/common/types/agent-template'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { ImagePart, TextPart } from '@khiwniti/common/types/messages/content-part'
 
 /**
  * Tests to verify that image content is NOT propagated to spawned subagents via the `content` parameter.
@@ -42,6 +42,7 @@ describe('Spawn Agents Image Content Propagation', () => {
   let mockLoopAgentSteps: any
   let capturedLoopAgentStepsParams: any
 
+  let sessionState: ReturnType<typeof getInitialSessionState>
   let handleSpawnAgentsBaseParams: ParamsExcluding<
     typeof handleSpawnAgents,
     'agentState' | 'agentTemplate' | 'localAgentTemplates' | 'toolCall'
@@ -68,6 +69,8 @@ describe('Spawn Agents Image Content Propagation', () => {
         output: { type: 'lastMessage', value: [assistantMessage('Mock agent response')] },
       }
     })
+
+    sessionState = getInitialSessionState(mockFileContext)
 
     handleSpawnAgentsBaseParams = {
       ...TEST_AGENT_RUNTIME_IMPL,
@@ -100,11 +103,7 @@ describe('Spawn Agents Image Content Propagation', () => {
     id,
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
-    inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as any,
-    },
+    inputSchema: {} as AgentTemplate['inputSchema'],
     spawnerPrompt: '',
     model: '',
     includeMessageHistory,
@@ -153,7 +152,6 @@ describe('Spawn Agents Image Content Propagation', () => {
     it('should NOT pass image content to spawned subagent', async () => {
       const parentAgent = createMockAgent('parent', true)
       const childAgent = createMockAgent('child-agent', true)
-      const sessionState = getInitialSessionState(mockFileContext)
       const toolCall = createSpawnToolCall('child-agent', 'analyze the image')
 
       // Simulate that parent was called with image content
@@ -173,7 +171,7 @@ describe('Spawn Agents Image Content Propagation', () => {
         toolCall,
         // This is the key: parent context includes image content
         content: imageContent,
-      } as any)
+      } as Parameters<typeof handleSpawnAgents>[0])
 
       // Verify that loopAgentSteps was called
       expect(mockLoopAgentSteps).toHaveBeenCalledTimes(1)
@@ -186,7 +184,6 @@ describe('Spawn Agents Image Content Propagation', () => {
     it('should NOT include images in spawned subagent initial messages', async () => {
       const parentAgent = createMockAgent('parent', true)
       const childAgent = createMockAgent('child-agent', true)
-      const sessionState = getInitialSessionState(mockFileContext)
       const toolCall = createSpawnToolCall('child-agent', 'do something')
 
       const imageContent = createImageContent()
@@ -202,7 +199,7 @@ describe('Spawn Agents Image Content Propagation', () => {
         localAgentTemplates: { 'child-agent': childAgent },
         toolCall,
         content: imageContent,
-      } as any)
+      } as Parameters<typeof handleSpawnAgents>[0])
 
       expect(mockLoopAgentSteps).toHaveBeenCalledTimes(1)
 
@@ -214,7 +211,6 @@ describe('Spawn Agents Image Content Propagation', () => {
     it('should pass prompt to subagent but NOT image content', async () => {
       const parentAgent = createMockAgent('parent', true)
       const childAgent = createMockAgent('child-agent', true)
-      const sessionState = getInitialSessionState(mockFileContext)
       const subagentPrompt = 'Please analyze this for me'
       const toolCall = createSpawnToolCall('child-agent', subagentPrompt)
 
@@ -229,7 +225,7 @@ describe('Spawn Agents Image Content Propagation', () => {
         localAgentTemplates: { 'child-agent': childAgent },
         toolCall,
         content: imageContent,
-      } as any)
+      } as Parameters<typeof handleSpawnAgents>[0])
 
       expect(mockLoopAgentSteps).toHaveBeenCalledTimes(1)
 
@@ -245,7 +241,6 @@ describe('Spawn Agents Image Content Propagation', () => {
     it('should NOT pass image content to inline spawned subagent', async () => {
       const parentAgent = createMockAgent('parent', true)
       const childAgent = createMockAgent('child-agent', true)
-      const sessionState = getInitialSessionState(mockFileContext)
       const toolCall = createInlineSpawnToolCall('child-agent', 'inline task')
 
       const imageContent = createImageContent()
@@ -261,7 +256,7 @@ describe('Spawn Agents Image Content Propagation', () => {
         localAgentTemplates: { 'child-agent': childAgent },
         toolCall,
         content: imageContent,
-      } as any)
+      } as Parameters<typeof handleSpawnAgentInline>[0])
 
       expect(mockLoopAgentSteps).toHaveBeenCalledTimes(1)
 
@@ -272,7 +267,6 @@ describe('Spawn Agents Image Content Propagation', () => {
     it('should NOT propagate images through multiple spawn levels', async () => {
       const parentAgent = createMockAgent('parent', true)
       const childAgent = createMockAgent('child-agent', true)
-      const sessionState = getInitialSessionState(mockFileContext)
       const toolCall = createInlineSpawnToolCall('child-agent', 'nested task')
 
       const imageContent = createImageContent()
@@ -286,7 +280,7 @@ describe('Spawn Agents Image Content Propagation', () => {
         localAgentTemplates: { 'child-agent': childAgent },
         toolCall,
         content: imageContent,
-      } as any)
+      } as Parameters<typeof handleSpawnAgentInline>[0])
 
       expect(mockLoopAgentSteps).toHaveBeenCalledTimes(1)
 
@@ -301,7 +295,6 @@ describe('Spawn Agents Image Content Propagation', () => {
       parentAgent.spawnableAgents = ['child-agent', 'another-agent']
       const childAgent = createMockAgent('child-agent', true)
       const anotherAgent = createMockAgent('another-agent', true)
-      const sessionState = getInitialSessionState(mockFileContext)
 
       const imageContent = createImageContent()
 
@@ -341,7 +334,7 @@ describe('Spawn Agents Image Content Propagation', () => {
         },
         toolCall,
         content: imageContent,
-      } as any)
+      } as Parameters<typeof handleSpawnAgents>[0])
 
       // Both subagents should have been spawned
       expect(mockLoopAgentSteps).toHaveBeenCalledTimes(2)

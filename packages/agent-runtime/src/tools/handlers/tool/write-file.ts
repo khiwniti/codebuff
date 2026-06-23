@@ -1,3 +1,4 @@
+import { AbortError } from '@khiwniti/common/util/error'
 import { partition } from 'lodash'
 
 import { processFileBlock } from '../../../process-file-block'
@@ -7,11 +8,11 @@ import type {
   ClientToolCall,
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { RequestOptionalFileFn } from '@codebuff/common/types/contracts/client'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { AgentState } from '@codebuff/common/types/session-state'
+} from '@khiwniti/common/tools/list'
+import type { RequestOptionalFileFn } from '@khiwniti/common/types/contracts/client'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { AgentState } from '@khiwniti/common/types/session-state'
 
 type FileProcessingTools = 'write_file' | 'str_replace' | 'create_plan'
 export type FileProcessing<
@@ -77,35 +78,20 @@ export const handleWriteFile = (async (
     ) => Promise<CodebuffToolOutput<'write_file'>>
     requestOptionalFile: RequestOptionalFileFn
     writeToClient: (chunk: string) => void
-  } & ParamsExcluding<
-    typeof processFileBlock,
-    | 'path'
-    | 'instructions'
-    | 'fingerprintId'
-    | 'initialContentPromise'
-    | 'newContent'
-    | 'messages'
-    | 'lastUserPrompt'
-  > &
-    ParamsExcluding<RequestOptionalFileFn, 'filePath'>,
+  } & ParamsExcluding<RequestOptionalFileFn, 'filePath'>,
 ): Promise<{ output: CodebuffToolOutput<'write_file'> }> => {
   const {
     previousToolCallFinished,
     toolCall,
 
-    agentState,
-    clientSessionId,
     fileProcessingState,
-    fingerprintId,
     logger,
-    prompt,
-    userInputId,
 
     requestClientToolCall,
     requestOptionalFile,
     writeToClient,
   } = params
-  const { path, instructions, content } = toolCall.input
+  const { path, content } = toolCall.input
 
   const fileProcessingPromisesByPath = fileProcessingState.promisesByPath
   const fileProcessingPromises = fileProcessingState.allPromises
@@ -132,24 +118,28 @@ export const handleWriteFile = (async (
   logger.debug({ path, content }, `write_file ${path}`)
 
   const newPromise = processFileBlock({
-    ...params,
     path,
-    instructions,
     initialContentPromise: latestContentPromise,
     newContent: fileContentWithoutStartNewline,
-    messages: agentState.messageHistory,
-    lastUserPrompt: prompt,
-    clientSessionId,
-    fingerprintId,
-    userInputId,
     logger,
   })
+    .then((result) => {
+      // Check for abort and throw at the boundary
+      if (result.aborted) {
+        throw new AbortError(result.reason)
+      }
+      return result.value
+    })
     .catch((error) => {
+      // AbortError propagates up - don't convert to tool error
+      if (error instanceof AbortError) {
+        throw error
+      }
       logger.error(error, 'Error processing write_file block')
       return {
         tool: 'write_file' as const,
         path,
-        error: `Error: Failed to process the write_file block. ${typeof error === 'string' ? error : error.msg}`,
+        error: `Error: Failed to process the write_file block. ${typeof error === 'string' ? error : error.message}`,
       }
     })
     .then(async (fileProcessingResult) => ({
@@ -212,7 +202,7 @@ export async function postStreamProcessing<T extends FileProcessingTools>(
     >[]
   }
 
-  const toolCallResults: string[] = []
+  // Note: toolCallResults was previously assigned but unused - errors are returned directly now
 
   const errors = fileProcessingState.fileChangeErrors.filter(
     (result) => result.toolCallId === toolCall.toolCallId,

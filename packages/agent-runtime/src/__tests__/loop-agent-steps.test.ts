@@ -1,13 +1,14 @@
-import * as analytics from '@codebuff/common/analytics'
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
+import * as analytics from '@khiwniti/common/analytics'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { createTestAgentRuntimeParams } from '@khiwniti/common/testing/fixtures/agent-runtime'
+import { clearMockedModules } from '@khiwniti/common/testing/mock-modules'
 import {
-  clearMockedModules,
-  mockModule,
-} from '@codebuff/common/testing/mock-modules'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
-import db from '@codebuff/internal/db'
+  createMockDbOperations,
+  setupDbSpies,
+} from '@khiwniti/common/testing/mocks/database'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
+import { AbortError, promptSuccess } from '@khiwniti/common/util/error'
+import { assistantMessage, userMessage } from '@khiwniti/common/util/messages'
 import {
   afterAll,
   afterEach,
@@ -19,6 +20,7 @@ import {
   mock,
   spyOn,
 } from 'bun:test'
+import { APICallError, RetryError } from 'ai'
 import { z } from 'zod/v4'
 
 import { loopAgentSteps } from '../run-agent-step'
@@ -26,59 +28,49 @@ import { clearAgentGeneratorCache } from '../run-programmatic-step'
 import { createToolCallChunk, mockFileContext } from './test-utils'
 
 import type { AgentTemplate } from '../templates/types'
-import type { StepGenerator } from '@codebuff/common/types/agent-template'
-import type { AgentState } from '@codebuff/common/types/session-state'
+import type { DbSpies } from '@khiwniti/common/testing/mocks/database'
+import type { StepGenerator } from '@khiwniti/common/types/agent-template'
+import type { AgentState } from '@khiwniti/common/types/session-state'
 
 describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => {
   let mockTemplate: AgentTemplate
   let mockAgentState: AgentState
   let llmCallCount: number
-  let agentRuntimeImpl: any
-  let loopAgentStepsBaseParams: any
+  let agentRuntimeImpl: Omit<
+    ReturnType<typeof createTestAgentRuntimeParams>,
+    'agentTemplate' | 'localAgentTemplates'
+  > & {
+    promptAiSdkStream?: ReturnType<typeof mock>
+  }
+  let loopAgentStepsBaseParams: Parameters<typeof loopAgentSteps>[0]
+  let dbSpies: DbSpies
 
   beforeAll(async () => {
-    // Mock bigquery
-    await mockModule('@codebuff/bigquery', () => ({
-      insertTrace: () => {},
-    }))
+    // Set up mocks.
   })
 
   beforeEach(() => {
     const {
-      agentTemplate: _agentTemplate,
-      localAgentTemplates: _localAgentTemplates,
+      agentTemplate: _,
+      localAgentTemplates: __,
       ...baseRuntimeParams
     } = createTestAgentRuntimeParams()
 
     agentRuntimeImpl = {
       ...baseRuntimeParams,
-      sendAction: () => {},
-      requestFiles: async () => ({}),
     }
 
     llmCallCount = 0
 
-    // Setup spies for database operations
-    spyOn(db, 'insert').mockReturnValue({
-      values: mock(() => {
-        return Promise.resolve({ id: 'test-run-id' })
-      }),
-    } as any)
+    // Setup spies for database operations using typed helper
+    dbSpies = setupDbSpies(createMockDbOperations())
 
-    spyOn(db, 'update').mockReturnValue({
-      set: mock(() => ({
-        where: mock(() => {
-          return Promise.resolve()
-        }),
-      })),
-    } as any)
-
-    agentRuntimeImpl.promptAiSdkStream = async function* ({}) {
+    agentRuntimeImpl.promptAiSdkStream = mock(async function* ({}) {
       llmCallCount++
       yield { type: 'text' as const, text: 'LLM response\n\n' }
       yield createToolCallChunk('end_turn', {})
-      return 'mock-message-id'
-    }
+      return promptSuccess('mock-message-id')
+    })
 
     // Mock analytics
     spyOn(analytics, 'trackEvent').mockImplementation(() => {})
@@ -105,7 +97,7 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
       instructionsPrompt: 'Test user prompt',
       stepPrompt: 'Test agent step prompt',
       handleSteps: undefined, // Will be set in individual tests
-    } as AgentTemplate
+    } satisfies AgentTemplate as AgentTemplate
 
     // Create mock agent state
     const sessionState = getInitialSessionState(mockFileContext)
@@ -122,6 +114,8 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
 
     loopAgentStepsBaseParams = {
       ...agentRuntimeImpl,
+      agentType: 'test-agent',
+      localAgentTemplates: { 'test-agent': mockTemplate },
       repoId: undefined,
       repoUrl: undefined,
       userInputId: 'test-user-input',
@@ -140,13 +134,16 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
 
   afterEach(() => {
     clearAgentGeneratorCache(agentRuntimeImpl)
+    dbSpies.restore()
     mock.restore()
     const {
-      agentTemplate: _agentTemplate,
-      localAgentTemplates: _localAgentTemplates,
+      agentTemplate: _,
+      localAgentTemplates: __,
       ...baseRuntimeParams
     } = createTestAgentRuntimeParams()
-    agentRuntimeImpl = { ...baseRuntimeParams }
+    agentRuntimeImpl = {
+      ...baseRuntimeParams,
+    }
   })
 
   afterAll(() => {
@@ -350,6 +347,34 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
     expect(result.agentState).toBeDefined()
   })
 
+  it('should pass the full message history to the traceWriter when provided', async () => {
+    const recordedSteps: Array<{ agentId: string; messages: unknown[] }> = []
+    const traceWriter = {
+      recordStep: (params: { agentId: string; messages: unknown[] }) => {
+        recordedSteps.push(params)
+      },
+    }
+
+    const result = await loopAgentSteps({
+      ...loopAgentStepsBaseParams,
+      traceWriter,
+      agentType: 'test-agent',
+      localAgentTemplates: {
+        'test-agent': { ...mockTemplate, handleSteps: undefined },
+      },
+    })
+
+    expect(result.agentState).toBeDefined()
+    // Called at least at the start and end of the step
+    expect(recordedSteps.length).toBeGreaterThanOrEqual(2)
+    expect(recordedSteps[0]!.agentId).toBe('test-agent-id')
+    // End-of-step call sees the assistant response appended to the history
+    const lastMessages = recordedSteps[recordedSteps.length - 1]!.messages
+    expect(lastMessages.length).toBeGreaterThan(
+      recordedSteps[0]!.messages.length,
+    )
+  })
+
   it('should handle programmatic agent error and still call LLM', async () => {
     // Test error handling in programmatic step - should still allow LLM to run
 
@@ -450,7 +475,7 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
     })
 
     // Verify that stepsComplete was passed correctly:
-    // After yielding STEP and LLM running (which calls end_turn), 
+    // After yielding STEP and LLM running (which calls end_turn),
     // the generator receives stepsComplete: true
     expect(stepsCompleteValues).toHaveLength(1)
     expect(stepsCompleteValues[0]).toBe(true)
@@ -491,7 +516,7 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
       // LLM always tries to end turn
       yield { type: 'text' as const, text: 'LLM response\n\n' }
       yield createToolCallChunk('end_turn', {})
-      return `mock-message-id-${promptCallCount}`
+      return promptSuccess(`mock-message-id-${promptCallCount}`)
     }
 
     await loopAgentSteps({
@@ -537,7 +562,10 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
       llmCallNumber++
       if (llmCallNumber === 1) {
         // First call: agent tries to end turn without setting output
-        yield { type: 'text' as const, text: 'First response without output\n\n' }
+        yield {
+          type: 'text' as const,
+          text: 'First response without output\n\n',
+        }
         yield createToolCallChunk('end_turn', {})
       } else if (llmCallNumber === 2) {
         // Second call: agent sets output after being reminded
@@ -549,7 +577,10 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
           }
         }
         yield { type: 'text' as const, text: 'Setting output now\n\n' }
-        yield createToolCallChunk('set_output', { result: 'test result', status: 'success' })
+        yield createToolCallChunk('set_output', {
+          result: 'test result',
+          status: 'success',
+        })
         yield { type: 'text' as const, text: '\n\n' }
         yield createToolCallChunk('end_turn', {})
       } else {
@@ -557,7 +588,7 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
         yield { type: 'text' as const, text: 'Ending\n\n' }
         yield createToolCallChunk('end_turn', {})
       }
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     mockAgentState.output = undefined
@@ -620,7 +651,7 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
       yield createToolCallChunk('set_output', { result: 'success' })
       yield { type: 'text' as const, text: '\n\n' }
       yield createToolCallChunk('end_turn', {})
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     mockAgentState.output = undefined
@@ -658,13 +689,15 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
     // Mock promptAiSdk to capture the n parameter
     loopAgentStepsBaseParams.promptAiSdk = async (params: any) => {
       agentStepN = params.n
-      return JSON.stringify([
-        'Response 1',
-        'Response 2',
-        'Response 3',
-        'Response 4',
-        'Response 5',
-      ])
+      return promptSuccess(
+        JSON.stringify([
+          'Response 1',
+          'Response 2',
+          'Response 3',
+          'Response 4',
+          'Response 5',
+        ]),
+      )
     }
 
     await loopAgentSteps({
@@ -704,7 +737,7 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
       'Implementation C',
     ]
     loopAgentStepsBaseParams.promptAiSdk = async () => {
-      return JSON.stringify(expectedResponses)
+      return promptSuccess(JSON.stringify(expectedResponses))
     }
 
     await loopAgentSteps({
@@ -734,7 +767,7 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
       llmCallNumber++
       yield { type: 'text' as const, text: 'Response without output\n\n' }
       yield createToolCallChunk('end_turn', {})
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     const result = await loopAgentSteps({
@@ -787,7 +820,7 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
         yield { type: 'text' as const, text: '\n\n' }
         yield createToolCallChunk('end_turn', {})
       }
-      return 'mock-message-id'
+      return promptSuccess('mock-message-id')
     }
 
     mockAgentState.output = undefined
@@ -804,5 +837,304 @@ describe('loopAgentSteps - runAgentStep vs runProgrammaticStep behavior', () => 
 
     // Should have output set
     expect(result.agentState.output).toEqual({ result: 'done' })
+  })
+
+  describe('abort handling', () => {
+    it('should handle AbortError and finish with cancelled status', async () => {
+      // Test that when an AbortError is thrown (e.g., from a tool handler),
+      // loopAgentSteps catches it, finishes with 'cancelled' status, and returns
+      // an error output indicating the run was cancelled.
+
+      const llmOnlyTemplate = {
+        ...mockTemplate,
+        handleSteps: undefined,
+      }
+
+      const localAgentTemplates = {
+        'test-agent': llmOnlyTemplate,
+      }
+
+      // Track finishAgentRun calls
+      let finishAgentRunStatus: string | undefined
+      const mockFinishAgentRun = mock(async (params: { status: string }) => {
+        finishAgentRunStatus = params.status
+      })
+
+      // Mock promptAiSdkStream to throw an AbortError (simulating user cancellation mid-stream)
+      loopAgentStepsBaseParams.promptAiSdkStream = async function* () {
+        // Yield some content first
+        yield { type: 'text' as const, text: 'Starting work...\n' }
+        // Then throw AbortError to simulate user cancellation
+        throw new AbortError('User pressed Ctrl+C')
+      }
+
+      const result = await loopAgentSteps({
+        ...loopAgentStepsBaseParams,
+        agentType: 'test-agent',
+        localAgentTemplates,
+        finishAgentRun: mockFinishAgentRun,
+      })
+
+      // Verify the output indicates cancellation
+      expect(result.output.type).toBe('error')
+      if (result.output.type === 'error') {
+        expect(result.output.message).toBe('Run cancelled by user')
+      }
+
+      // Verify finishAgentRun was called with 'cancelled' status
+      expect(mockFinishAgentRun).toHaveBeenCalled()
+      expect(finishAgentRunStatus).toBe('cancelled')
+    })
+
+    it('should distinguish AbortError from other errors', async () => {
+      // Test that non-abort errors are NOT treated as cancellations
+
+      const llmOnlyTemplate = {
+        ...mockTemplate,
+        handleSteps: undefined,
+      }
+
+      const localAgentTemplates = {
+        'test-agent': llmOnlyTemplate,
+      }
+
+      // Track finishAgentRun calls
+      let finishAgentRunStatus: string | undefined
+      const mockFinishAgentRun = mock(async (params: { status: string }) => {
+        finishAgentRunStatus = params.status
+      })
+
+      // Mock promptAiSdkStream to throw a regular error (not AbortError)
+      loopAgentStepsBaseParams.promptAiSdkStream = async function* () {
+        yield { type: 'text' as const, text: 'Starting...\n' }
+        throw new Error('Network connection failed')
+      }
+
+      const result = await loopAgentSteps({
+        ...loopAgentStepsBaseParams,
+        agentType: 'test-agent',
+        localAgentTemplates,
+        finishAgentRun: mockFinishAgentRun,
+      })
+
+      // Verify the output indicates an error (not cancellation)
+      expect(result.output.type).toBe('error')
+      if (result.output.type === 'error') {
+        expect(result.output.message).toContain('Network connection failed')
+        expect(result.output.message).not.toBe('Run cancelled by user')
+      }
+
+      // Verify finishAgentRun was called with 'failed' status (not 'cancelled')
+      expect(mockFinishAgentRun).toHaveBeenCalled()
+      expect(finishAgentRunStatus).toBe('failed')
+    })
+
+    it('should handle signal.aborted before loop starts', async () => {
+      // Test that if signal is already aborted when loopAgentSteps is called,
+      // it returns immediately with a cancelled message
+
+      const abortController = new AbortController()
+      abortController.abort() // Abort immediately
+
+      const llmOnlyTemplate = {
+        ...mockTemplate,
+        handleSteps: undefined,
+      }
+
+      const localAgentTemplates = {
+        'test-agent': llmOnlyTemplate,
+      }
+
+      const result = await loopAgentSteps({
+        ...loopAgentStepsBaseParams,
+        agentType: 'test-agent',
+        localAgentTemplates,
+        signal: abortController.signal,
+      })
+
+      // Verify the output indicates cancellation
+      expect(result.output.type).toBe('error')
+      if (result.output.type === 'error') {
+        expect(result.output.message).toBe('Run cancelled by user')
+      }
+
+      // LLM should not have been called since we aborted before starting
+      expect(llmCallCount).toBe(0)
+    })
+  })
+
+  describe('API error handling', () => {
+    it('should propagate error code and server message from 403 APICallError responseBody', async () => {
+      const llmOnlyTemplate = {
+        ...mockTemplate,
+        handleSteps: undefined,
+      }
+
+      const localAgentTemplates = {
+        'test-agent': llmOnlyTemplate,
+      }
+
+      // Mock promptAiSdkStream to throw an APICallError with a 403 status
+      // and a responseBody containing the server's structured error
+      loopAgentStepsBaseParams.promptAiSdkStream = async function* () {
+        throw new APICallError({
+          statusCode: 403,
+          message: 'Forbidden',
+          url: 'https://api.codebuff.com/v1/chat/completions',
+          requestBodyValues: {},
+          responseBody: JSON.stringify({
+            error: 'free_mode_unavailable',
+            message: 'Free mode is not available in your country.',
+            countryCode: 'US',
+            countryBlockReason: 'anonymous_network',
+            ipPrivacySignals: ['vpn', 'hosting'],
+          }),
+          isRetryable: false,
+        })
+      }
+
+      const result = await loopAgentSteps({
+        ...loopAgentStepsBaseParams,
+        agentType: 'test-agent',
+        localAgentTemplates,
+      })
+
+      expect(result.output.type).toBe('error')
+      if (result.output.type === 'error') {
+        // Should use the server's message, NOT the generic "Forbidden"
+        expect(result.output.message).toBe(
+          'Free mode is not available in your country.',
+        )
+        // Should NOT have the 'Agent run error: ' prefix since message came from responseBody
+        expect(result.output.message).not.toContain('Agent run error:')
+        // Should propagate the error code so the CLI can match on it
+        expect(result.output.error).toBe('free_mode_unavailable')
+        // Should propagate the status code
+        expect(result.output.statusCode).toBe(403)
+        expect(result.output.countryCode).toBe('US')
+        expect(result.output.countryBlockReason).toBe('anonymous_network')
+        expect(result.output.ipPrivacySignals).toEqual(['vpn', 'hosting'])
+      }
+    })
+
+    it('should prefix with "Agent run error:" when responseBody has no parseable message', async () => {
+      const llmOnlyTemplate = {
+        ...mockTemplate,
+        handleSteps: undefined,
+      }
+
+      const localAgentTemplates = {
+        'test-agent': llmOnlyTemplate,
+      }
+
+      // APICallError with no responseBody
+      loopAgentStepsBaseParams.promptAiSdkStream = async function* () {
+        throw new APICallError({
+          statusCode: 500,
+          message: 'Internal Server Error',
+          url: 'https://api.codebuff.com/v1/chat/completions',
+          requestBodyValues: {},
+          responseBody: undefined,
+          isRetryable: true,
+        })
+      }
+
+      const result = await loopAgentSteps({
+        ...loopAgentStepsBaseParams,
+        agentType: 'test-agent',
+        localAgentTemplates,
+      })
+
+      expect(result.output.type).toBe('error')
+      if (result.output.type === 'error') {
+        // Should have the prefix since there's no server message
+        expect(result.output.message).toContain('Agent run error:')
+        expect(result.output.message).toContain('Internal Server Error')
+        // No error code since responseBody wasn't parseable
+        expect(result.output.error).toBeUndefined()
+      }
+    })
+
+    it('should unwrap retry errors to propagate underlying 409 gate errors', async () => {
+      const llmOnlyTemplate = {
+        ...mockTemplate,
+        handleSteps: undefined,
+      }
+
+      const localAgentTemplates = {
+        'test-agent': llmOnlyTemplate,
+      }
+
+      const apiError = new APICallError({
+        statusCode: 409,
+        message: 'Conflict',
+        url: 'https://api.codebuff.com/v1/chat/completions',
+        requestBodyValues: {},
+        responseBody: JSON.stringify({
+          error: 'session_superseded',
+          message:
+            'Another instance of freebuff has taken over this session. Only one instance per account is allowed.',
+        }),
+        isRetryable: true,
+      })
+
+      loopAgentStepsBaseParams.promptAiSdkStream = async function* () {
+        throw new RetryError({
+          message: 'Failed after 4 attempts. Last error: Conflict',
+          reason: 'maxRetriesExceeded',
+          errors: [apiError],
+        })
+      }
+
+      const result = await loopAgentSteps({
+        ...loopAgentStepsBaseParams,
+        agentType: 'test-agent',
+        localAgentTemplates,
+      })
+
+      expect(result.output.type).toBe('error')
+      if (result.output.type === 'error') {
+        expect(result.output.message).toBe(
+          'Another instance of freebuff has taken over this session. Only one instance per account is allowed.',
+        )
+        expect(result.output.message).not.toContain('Agent run error:')
+        expect(result.output.error).toBe('session_superseded')
+        expect(result.output.statusCode).toBe(409)
+      }
+    })
+
+    it('should explain fetch idle timeouts instead of showing the raw runtime message', async () => {
+      const llmOnlyTemplate = {
+        ...mockTemplate,
+        handleSteps: undefined,
+      }
+
+      const localAgentTemplates = {
+        'test-agent': llmOnlyTemplate,
+      }
+
+      // Bun aborts a fetch after 5 minutes without receiving bytes, throwing a
+      // DOMException named TimeoutError with this exact message.
+      loopAgentStepsBaseParams.promptAiSdkStream = async function* () {
+        const timeoutError = new Error('The operation timed out.')
+        timeoutError.name = 'TimeoutError'
+        throw timeoutError
+      }
+
+      const result = await loopAgentSteps({
+        ...loopAgentStepsBaseParams,
+        agentType: 'test-agent',
+        localAgentTemplates,
+      })
+
+      expect(result.output.type).toBe('error')
+      if (result.output.type === 'error') {
+        expect(result.output.message).toContain(
+          'no data was received from the server for 5 minutes',
+        )
+        expect(result.output.message).not.toContain('Agent run error:')
+        expect(result.output.message).not.toBe('The operation timed out.')
+      }
+    })
   })
 })

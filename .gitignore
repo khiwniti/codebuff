@@ -23,6 +23,9 @@ npm-app/src/__tests__/data/
 **.log
 
 debug/
+.context/
+docs/bot-detection.md
+.codex
 
 # Nx cache directories
 .nx/cache
@@ -30,3 +33,7 @@ debug/
 
 # Infisical config (user-specific)
 .infisical.json
+.gstack/
+
+# Buffbench DEBUG_ERROR dumps
+evals/buffbench/*-error-*.json

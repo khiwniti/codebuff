@@ -1,15 +1,15 @@
 import {
   flattenTree,
   getLastReadFilePaths,
-} from '@codebuff/common/project-file-tree'
-import { createMarkdownFileBlock } from '@codebuff/common/util/file'
-import { truncateString } from '@codebuff/common/util/string'
-import { closeXml } from '@codebuff/common/util/xml'
+} from '@khiwniti/common/project-file-tree'
+import { createMarkdownFileBlock } from '@khiwniti/common/util/file'
+import { truncateString } from '@khiwniti/common/util/string'
+import { closeXml } from '@khiwniti/common/util/xml'
 
 import { truncateFileTreeBasedOnTokenBudget } from './truncate-file-tree'
 
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 
 export const knowledgeFilesPrompt = `
 # Knowledge files
@@ -174,6 +174,7 @@ export const getSystemInfoPrompt = (fileContext: ProjectFileContext) => {
 Operating System: ${systemInfo.platform}
 ${systemInfo.platform === 'win32' ? windowsNote + '\n' : ''}
 Shell: ${systemInfo.shell}
+Chrome: ${systemInfo.chromeAvailable ? 'installed' : 'not found'}
 
 <user_shell_config_files>
 ${Object.entries(shellConfigFiles)

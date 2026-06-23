@@ -1,9 +1,11 @@
 import {
   validateAgents as validateAgentsCommon,
   type DynamicAgentValidationError,
-} from '@codebuff/common/templates/agent-validation'
-import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
+} from '@khiwniti/common/templates/agent-validation'
+
 import { WEBSITE_URL } from './constants'
+
+import type { AgentDefinition } from '@khiwniti/common/templates/initial-agents-dir/types/agent-definition'
 
 export interface ValidationResult {
   success: boolean
@@ -141,7 +143,7 @@ export async function validateAgents(
 
   // Transform validation errors to the SDK format
   const transformedErrors = validationErrors.map((error) => ({
-    id: error.filePath,
+    id: error.filePath ?? 'unknown',
     message: error.message,
   }))
 

@@ -1,12 +1,14 @@
 import { TextAttributes } from '@opentui/core'
 import React, { memo, type ReactNode } from 'react'
 
-import { Button } from '../button'
-import { CollapseButton } from '../collapse-button'
 import { useTheme } from '../../hooks/use-theme'
 import { useWhyDidYouUpdateById } from '../../hooks/use-why-did-you-update'
 import { getCliEnv } from '../../utils/env'
+import { MAX_COLLAPSED_LINES, truncateToLines } from '../../utils/strings'
 import { BORDER_CHARS } from '../../utils/ui-constants'
+import { Button } from '../button'
+import { CollapseButton } from '../collapse-button'
+import { ShimmerText } from '../shimmer-text'
 
 interface AgentBranchItemProps {
   name: string
@@ -15,8 +17,8 @@ interface AgentBranchItemProps {
   agentId?: string
   isCollapsed: boolean
   isStreaming: boolean
-  streamingPreview: string
-  finishedPreview: string
+  /** Preview text shown when collapsed (empty string = no preview) */
+  preview: string
   statusLabel?: string
   statusColor?: string
   statusIndicator?: string
@@ -32,8 +34,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
     agentId,
     isCollapsed,
     isStreaming,
-    streamingPreview,
-    finishedPreview,
+    preview,
     statusLabel,
     statusColor,
     statusIndicator = '●',
@@ -64,8 +65,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
         ? `${statusLabel} ${statusIndicator}`
         : `${statusIndicator} ${statusLabel}`
       : null
-  const showCollapsedPreview =
-    (isStreaming && !!streamingPreview) || (!isStreaming && !!finishedPreview)
+  const showCollapsedPreview = preview.length > 0
 
   const isTextRenderable = (value: ReactNode): boolean => {
     if (value === null || value === undefined || typeof value === 'boolean') {
@@ -81,8 +81,9 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
     }
 
     if (React.isValidElement(value)) {
+      const elProps = value.props as Record<string, unknown>
       if (value.type === React.Fragment) {
-        return isTextRenderable(value.props.children)
+        return isTextRenderable(elProps.children as ReactNode)
       }
 
       if (typeof value.type === 'string') {
@@ -91,7 +92,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
           value.type === 'strong' ||
           value.type === 'em'
         ) {
-          return isTextRenderable(value.props.children)
+          return isTextRenderable(elProps.children as ReactNode)
         }
 
         return false
@@ -126,7 +127,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
     if (React.isValidElement(value)) {
       if (value.key === null || value.key === undefined) {
         return (
-          <box key="expanded-node" style={{ flexDirection: 'column', gap: 0 }}>
+          <box key="expanded-node" style={{ flexDirection: 'column', gap: 1 }}>
             {value}
           </box>
         )
@@ -136,7 +137,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
 
     if (Array.isArray(value)) {
       return (
-        <box key="expanded-array" style={{ flexDirection: 'column', gap: 0 }}>
+        <box key="expanded-array" style={{ flexDirection: 'column', gap: 1 }}>
           {value.map((child, idx) => (
             <box
               key={`expanded-array-${idx}`}
@@ -150,7 +151,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
     }
 
     return (
-      <box key="expanded-unknown" style={{ flexDirection: 'column', gap: 0 }}>
+      <box key="expanded-unknown" style={{ flexDirection: 'column', gap: 1 }}>
         {value}
       </box>
     )
@@ -234,7 +235,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
                 fg={isStreaming ? theme.foreground : theme.muted}
                 attributes={getAttributes(TextAttributes.ITALIC)}
               >
-                {isStreaming ? streamingPreview : finishedPreview}
+                {truncateToLines(preview, MAX_COLLAPSED_LINES)}
               </text>
             </Button>
           ) : null
@@ -284,6 +285,22 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
             )}
             {renderExpandedContent(children)}
             {onToggle && <CollapseButton onClick={onToggle} />}
+          </box>
+        )}
+        {isStreaming && isExpanded && (
+          <box
+            style={{
+              paddingLeft: 1,
+              paddingBottom: 0,
+            }}
+          >
+            <text>
+              <ShimmerText
+                text="working..."
+                interval={160}
+                primaryColor={theme.secondary}
+              />
+            </text>
           </box>
         )}
       </box>

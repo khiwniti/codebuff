@@ -1,7 +1,6 @@
-import { trackEvent } from '@codebuff/common/analytics'
-import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
-import { AgentTemplateTypes } from '@codebuff/common/types/session-state'
-import { uniq } from 'lodash'
+import { trackEvent } from '@khiwniti/common/analytics'
+import { AnalyticsEvent } from '@khiwniti/common/constants/analytics-events'
+import { AgentTemplateTypes } from '@khiwniti/common/types/session-state'
 
 import { loopAgentSteps } from './run-agent-step'
 import {
@@ -10,20 +9,20 @@ import {
 } from './templates/agent-registry'
 
 import type { AgentTemplate } from './templates/types'
-import type { ClientAction } from '@codebuff/common/actions'
-import type { CostMode } from '@codebuff/common/old-constants'
+import type { ClientAction } from '@khiwniti/common/actions'
+import type { CostMode } from '@khiwniti/common/old-constants'
 import type {
   RequestToolCallFn,
   SendActionFn,
-} from '@codebuff/common/types/contracts/client'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+} from '@khiwniti/common/types/contracts/client'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { PrintModeEvent } from '@khiwniti/common/types/print-mode'
 import type {
   SessionState,
   AgentTemplateType,
   AgentOutput,
-} from '@codebuff/common/types/session-state'
+} from '@khiwniti/common/types/session-state'
 
 export async function mainPrompt(
   params: {
@@ -51,7 +50,7 @@ export async function mainPrompt(
   sessionState: SessionState
   output: AgentOutput
 }> {
-  const { action, localAgentTemplates, requestToolCall, logger } = params
+  const { action, localAgentTemplates, logger } = params
 
   const {
     prompt,
@@ -103,24 +102,17 @@ export async function mainPrompt(
     }
 
     agentType = agentId
-    logger.info(
-      {
-        agentId,
-        promptParams,
-        prompt: prompt?.slice(0, 50),
-      },
-      `Using CLI-specified agent: ${agentId}`,
-    )
   } else {
     agentType = (
       {
         ask: AgentTemplateTypes.ask,
-        lite: AgentTemplateTypes.base_lite,
+        free: AgentTemplateTypes.base_free,
+        lite: AgentTemplateTypes.base_free,
         normal: AgentTemplateTypes.base,
         max: AgentTemplateTypes.base_max,
         experimental: 'base2',
       } satisfies Record<CostMode, AgentTemplateType>
-    )[costMode ?? 'normal']
+    )[costMode ?? 'normal'] ?? 'base2'
   }
 
   mainAgentState.agentType = agentType
@@ -144,9 +136,21 @@ export async function mainPrompt(
     agentType,
     fingerprintId,
     fileContext,
+    costMode,
   })
 
-  logger.debug({ agentState, output }, 'Main prompt finished')
+  // Log a summary only: output can contain the full conversation
+  // (type 'allMessages'), which bloats log files on long chats.
+  logger.debug(
+    {
+      outputType: output?.type,
+      messageCount:
+        output && 'value' in output && Array.isArray(output.value)
+          ? output.value.length
+          : undefined,
+    },
+    'Main prompt finished',
+  )
 
   return {
     sessionState: {

@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef } from 'react'
 import stringWidth from 'string-width'
 
 import { useChatStore } from '../state/chat-store'
+import { IS_FREEBUFF } from '../utils/constants'
 
-import type { InputValue } from '../state/chat-store'
+import type { InputValue } from '../types/store'
 import type { AgentMode } from '../utils/constants'
 
 interface UseChatInputOptions {
@@ -33,8 +34,9 @@ export const useChatInput = ({
   const inputMode = useChatStore((state) => state.inputMode)
 
   // Estimate the collapsed toggle width as rendered by AgentModeToggle.
-  // In bash mode, compact height, or narrow width, we don't show the toggle, so no width needed.
-  const estimatedToggleWidth = inputMode !== 'default' || isCompactHeight || isNarrowWidth
+  // In Freebuff, the toggle is always hidden, so never reserve width for it.
+  // In non-Freebuff: hide in bash mode, compact height, or narrow width.
+  const estimatedToggleWidth = IS_FREEBUFF || inputMode !== 'default' || isCompactHeight || isNarrowWidth
     ? 0
     : stringWidth(`< ${agentMode}`) + 6 // 2 padding + 2 borders + 2 gap
 
@@ -71,6 +73,19 @@ export const useChatInput = ({
     }, 0)
   }, [setAgentMode, setInputValue, onSubmitPrompt])
 
+  const handleBuildLite = useCallback(() => {
+    setAgentMode('LITE')
+    setInputValue({
+      text: BUILD_IT_TEXT,
+      cursorPosition: BUILD_IT_TEXT.length,
+      lastEditDueToNav: true,
+    })
+    setTimeout(() => {
+      onSubmitPrompt(BUILD_IT_TEXT, 'LITE')
+      setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false })
+    }, 0)
+  }, [setAgentMode, setInputValue, onSubmitPrompt])
+
   useEffect(() => {
     if (initialPrompt && !hasAutoSubmittedRef.current) {
       hasAutoSubmittedRef.current = true
@@ -86,5 +101,6 @@ export const useChatInput = ({
     inputWidth,
     handleBuildFast,
     handleBuildMax,
+    handleBuildLite,
   }
 }

@@ -1,12 +1,14 @@
+
+import * as mainPromptModule from '@khiwniti/agent-runtime/main-prompt'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
+import { getStubProjectFileContext } from '@khiwniti/common/util/file'
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 
-import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { getStubProjectFileContext } from '@codebuff/common/util/file'
 import { CodebuffClient } from '../client'
 import * as databaseModule from '../impl/database'
-import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+
 import type { CodebuffClientOptions } from '../run'
+import type { PrintModeEvent } from '@khiwniti/common/types/print-mode'
 
 describe('CodebuffClient handleEvent / handleStreamChunk', () => {
   afterEach(() => {
@@ -18,9 +20,9 @@ describe('CodebuffClient handleEvent / handleStreamChunk', () => {
       id: 'user-123',
       email: 'test@example.com',
       discord_id: null,
-      referral_code: null,
       stripe_customer_id: null,
       banned: false,
+      created_at: new Date('2024-01-01T00:00:00Z'),
     })
     spyOn(databaseModule, 'fetchAgentFromDatabase').mockResolvedValue(null)
     spyOn(databaseModule, 'startAgentRun').mockResolvedValue('run-1')

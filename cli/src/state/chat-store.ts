@@ -2,114 +2,52 @@ import { castDraft } from 'immer'
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 
-import { AGENT_MODES } from '../utils/constants'
+import { AGENT_MODES, IS_FREEBUFF } from '../utils/constants'
 import { clamp } from '../utils/math'
 import { loadModePreference, saveModePreference } from '../utils/settings'
 
 import type { ChatMessage, ContentBlock } from '../types/chat'
 import type { AgentMode } from '../utils/constants'
 import type { InputMode } from '../utils/input-modes'
-import type { RunState } from '@codebuff/sdk'
+import type { RunState } from '@khiwniti/sdk'
 
-/** Types of banners that can appear at the top of the chat */
-export type TopBannerType = 'homeDir' | 'gitRoot' | null
+// Import types from the types/store module to avoid circular dependencies
+import type {
+  TopBannerType,
+  InputValue,
+  AskUserQuestion,
+  AnswerState,
+  AskUserState,
+  PendingImageStatus,
+  PendingImageAttachment,
+  PendingTextAttachment,
+  PendingFileAttachment,
+  PendingAttachment,
+  PendingImage,
+  PendingBashMessage,
+  SuggestedFollowup,
+  SuggestedFollowupsState,
+  ClickedFollowupsMap,
+} from '../types/store'
 
-export type InputValue = {
-  text: string
-  cursorPosition: number
-  lastEditDueToNav: boolean
+// Re-export types from the types/store module to maintain backwards compatibility
+export type {
+  TopBannerType,
+  InputValue,
+  AskUserQuestion,
+  AnswerState,
+  AskUserState,
+  PendingImageStatus,
+  PendingImageAttachment,
+  PendingTextAttachment,
+  PendingFileAttachment,
+  PendingAttachment,
+  PendingImage,
+  PendingBashMessage,
+  SuggestedFollowup,
+  SuggestedFollowupsState,
+  ClickedFollowupsMap,
 }
-
-export type AskUserQuestion = {
-  question: string
-  header?: string
-  options:
-    | string[]
-    | Array<{
-        label: string
-        description?: string
-      }>
-  multiSelect?: boolean
-  validation?: {
-    maxLength?: number
-    minLength?: number
-    pattern?: string
-    patternError?: string
-  }
-}
-
-export type AnswerState = number | number[]
-
-export type AskUserState = {
-  toolCallId: string
-  questions: AskUserQuestion[]
-  selectedAnswers: AnswerState[] // Single-select: number (-1 = not answered), Multi-select: number[]
-  otherTexts: string[] // Custom text input for each question (empty string if not used)
-} | null
-
-export type PendingImageStatus = 'processing' | 'ready' | 'error'
-
-/** Image attachment with processed data */
-export type PendingImageAttachment = {
-  kind: 'image'
-  path: string
-  filename: string
-  status: PendingImageStatus
-  size?: number
-  width?: number
-  height?: number
-  note?: string // Display note: "compressed" | error message
-  processedImage?: {
-    base64: string
-    mediaType: string
-  }
-}
-
-/** Text attachment (large pasted text) */
-export type PendingTextAttachment = {
-  kind: 'text'
-  id: string
-  content: string
-  preview: string // First ~100 chars for display
-  charCount: number
-}
-
-/** Unified attachment type with discriminator */
-export type PendingAttachment = PendingImageAttachment | PendingTextAttachment
-
-/** @deprecated Use PendingImageAttachment instead */
-export type PendingImage = PendingImageAttachment
-
-export type PendingBashMessage = {
-  id: string
-  command: string
-  stdout: string
-  stderr: string
-  exitCode: number
-  /** Whether the command is still running */
-  isRunning: boolean
-  startTime?: number
-  cwd?: string
-  /** Whether the message was already added to UI chat history (non-ghost mode) */
-  addedToHistory?: boolean
-}
-
-export type SuggestedFollowup = {
-  prompt: string
-  label?: string
-}
-
-export type SuggestedFollowupsState = {
-  /** The tool call ID that created these followups */
-  toolCallId: string
-  /** The list of followup suggestions */
-  followups: SuggestedFollowup[]
-  /** Set of indices that have been clicked */
-  clickedIndices: Set<number>
-}
-
-/** Map of toolCallId -> Set of clicked indices (persists across followup sets) */
-export type ClickedFollowupsMap = Map<string, Set<number>>
 
 export type ChatStoreState = {
   /** Unique ID for this chat session, regenerated on /new */
@@ -216,6 +154,7 @@ type ChatStoreActions = {
   addPendingTextAttachment: (attachment: Omit<PendingTextAttachment, 'kind'>) => void
   removePendingTextAttachment: (id: string) => void
   clearPendingTextAttachments: () => void
+  addPendingFileAttachment: (attachment: Omit<PendingFileAttachment, 'kind'>) => void
   addPendingBashMessage: (message: PendingBashMessage) => void
   updatePendingBashMessage: (
     id: string,
@@ -246,7 +185,7 @@ const initialState: ChatStoreState = {
   isChainInProgress: false,
   slashSelectedIndex: 0,
   agentSelectedIndex: 0,
-  agentMode: loadModePreference(),
+  agentMode: IS_FREEBUFF ? ('LITE' as const) : loadModePreference(),
   hasReceivedPlanResponse: false,
   lastMessageMode: null,
   sessionCreditsUsed: 0,
@@ -333,12 +272,14 @@ export const useChatStore = create<ChatStore>()(
 
     setAgentMode: (mode) =>
       set((state) => {
+        if (IS_FREEBUFF) return
         state.agentMode = mode
         saveModePreference(mode)
       }),
 
     toggleAgentMode: () =>
       set((state) => {
+        if (IS_FREEBUFF) return
         const currentIndex = AGENT_MODES.indexOf(state.agentMode)
         const nextIndex = (currentIndex + 1) % AGENT_MODES.length
         state.agentMode = AGENT_MODES[nextIndex]
@@ -392,10 +333,10 @@ export const useChatStore = create<ChatStore>()(
 
     addPendingAttachment: (attachment) =>
       set((state) => {
-        // Don't add duplicates
-        const id = attachment.kind === 'image' ? attachment.path : attachment.id
+        // Don't add duplicates — use path for image/file, id for text
+        const id = attachment.kind === 'text' ? attachment.id : attachment.path
         const isDuplicate = state.pendingAttachments.some((a) =>
-          a.kind === 'image' ? a.path === id : a.id === id,
+          a.kind === 'text' ? a.id === id : a.path === id,
         )
         if (!isDuplicate) {
           state.pendingAttachments.push(attachment)
@@ -405,7 +346,7 @@ export const useChatStore = create<ChatStore>()(
     removePendingAttachment: (id) =>
       set((state) => {
         state.pendingAttachments = state.pendingAttachments.filter((a) =>
-          a.kind === 'image' ? a.path !== id : a.id !== id,
+          a.kind === 'text' ? a.id !== id : a.path !== id,
         )
       }),
 
@@ -420,6 +361,15 @@ export const useChatStore = create<ChatStore>()(
     },
 
     removePendingImage: (path) => {
+      // Clear any auto-remove timer to prevent memory leaks
+      // Import dynamically to avoid circular dependency
+      import('../utils/pending-attachments')
+        .then(({ clearErrorImageTimer }) => {
+          clearErrorImageTimer(path)
+        })
+        .catch(() => {
+          // Silently ignore import errors - timer cleanup is best-effort
+        })
       useChatStore.getState().removePendingAttachment(path)
     },
 
@@ -444,6 +394,10 @@ export const useChatStore = create<ChatStore>()(
           (a) => a.kind !== 'text',
         )
       }),
+
+    addPendingFileAttachment: (attachment) => {
+      useChatStore.getState().addPendingAttachment({ ...attachment, kind: 'file' })
+    },
 
     updateAskUserAnswer: (questionIndex, optionIndex) =>
       set((state) => {

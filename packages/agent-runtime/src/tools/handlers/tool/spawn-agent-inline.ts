@@ -1,7 +1,8 @@
+import { mapValues } from 'lodash'
+
 import {
   validateAndGetAgentTemplate,
   validateAgentInput,
-  logAgentSpawn,
   executeSubagent,
   createAgentState,
   extractSubagentContextParams,
@@ -11,15 +12,14 @@ import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { AgentTemplate } from '@codebuff/common/types/agent-template'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
-import type { AgentState } from '@codebuff/common/types/session-state'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+} from '@khiwniti/common/tools/list'
+import type { AgentTemplate } from '@khiwniti/common/types/agent-template'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { PrintModeEvent } from '@khiwniti/common/types/print-mode'
+import type { AgentState } from '@khiwniti/common/types/session-state'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 import type { ToolSet } from 'ai'
-import { mapValues } from 'lodash'
 
 type ToolName = 'spawn_agent_inline'
 export const handleSpawnAgentInline = (async (
@@ -108,17 +108,6 @@ export const handleSpawnAgentInline = (async (
       inputSchema: tool.inputSchema as {},
     })),
   }
-
-  logAgentSpawn({
-    agentTemplate: inlineTemplate,
-    agentType,
-    agentId: childAgentState.agentId,
-    parentId: childAgentState.parentId,
-    prompt,
-    spawnParams,
-    inline: true,
-    logger,
-  })
 
   // Extract common context params to avoid bugs from spreading all params
   const contextParams = extractSubagentContextParams(params)

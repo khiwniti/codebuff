@@ -6,6 +6,7 @@ import { formatCodeSearchOutput } from '../../../common/src/util/format-code-sea
 import { getBundledRgPath } from '../native/ripgrep'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
+import { Logger } from '@khiwniti/common/types/contracts/logger'
 
 // Hidden directories to include in code search by default.
 // These are searched in addition to '.' to ensure important config/workflow files are discoverable.
@@ -27,6 +28,7 @@ export function codeSearch({
   globalMaxResults = 250,
   maxOutputStringLength = 20_000,
   timeoutSeconds = 10,
+  logger,
 }: {
   projectPath: string
   pattern: string
@@ -36,6 +38,7 @@ export function codeSearch({
   globalMaxResults?: number
   maxOutputStringLength?: number
   timeoutSeconds?: number
+  logger?: Logger
 }): Promise<CodebuffToolOutput<'code_search'>> {
   return new Promise((resolve) => {
     let isResolved = false
@@ -61,7 +64,12 @@ export function codeSearch({
 
     // Parse flags - do NOT deduplicate to preserve flag-argument pairs like '-g *.ts'
     // Deduplicating would break up these pairs and cause errors
-    const flagsArray = (flags || '').split(' ').filter(Boolean)
+    // Strip surrounding quotes from each token since spawn() passes args directly
+    // without shell interpretation (e.g. "'foo.md'" → "foo.md")
+    const flagsArray = (flags || '')
+      .split(' ')
+      .filter(Boolean)
+      .map((token) => token.replace(/^['"]|['"]$/g, ''))
 
     // Use JSON output for robust parsing and early stopping
     // --no-config prevents user/system .ripgreprc from interfering
@@ -89,6 +97,12 @@ export function codeSearch({
     ]
 
     const rgPath = getBundledRgPath(import.meta.url)
+    if (logger) {
+      logger.info(
+        { rgPath, args, searchCwd },
+        'code-search: Spawning ripgrep process',
+      )
+    }
     const childProcess = spawn(rgPath, args, {
       cwd: searchCwd,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -100,20 +114,30 @@ export function codeSearch({
     const fileGroups = new Map<string, string[]>()
     // Track match count per file separately from total lines
     const fileMatchCounts = new Map<string, number>()
+    const filesLimitedByMaxResults = new Set<string>()
     let matchesGlobal = 0
     let estimatedOutputLen = 0
     let killedForLimit = false
+
+    // Guard to prevent double-settlement from concurrent timeout and process close events
+    let killTimeoutId: ReturnType<typeof setTimeout> | null = null
 
     const settle = (payload: any) => {
       if (isResolved) return
       isResolved = true
 
-      // Clean up listeners immediately
+      // Clean up listeners immediately to prevent further events
       childProcess.stdout.removeAllListeners()
       childProcess.stderr.removeAllListeners()
       childProcess.removeAllListeners()
 
+      // Clear both the main timeout and the kill timeout to prevent late callbacks
       clearTimeout(timeoutId)
+      if (killTimeoutId) {
+        clearTimeout(killTimeoutId)
+        killTimeoutId = null
+      }
+
       resolve([{ type: 'json', value: payload }])
     }
 
@@ -121,13 +145,28 @@ export function codeSearch({
       try {
         childProcess.kill('SIGTERM')
       } catch {}
-      setTimeout(() => {
+      // Store timeout reference so it can be cleared if process closes normally
+      killTimeoutId = setTimeout(() => {
         try {
-          // SIGKILL doesn't exist on Windows, fall back to no-signal kill
-          childProcess.kill('SIGKILL') || childProcess.kill()
-        } catch {}
+          childProcess.kill('SIGKILL')
+        } catch {
+          try {
+            childProcess.kill()
+          } catch {}
+        }
+        killTimeoutId = null
       }, 1000)
     }
+
+    const formatCollectedOutput = (rawOutput: string) =>
+      formatCodeSearchOutput(rawOutput, {
+        matchCount: matchesGlobal,
+      })
+
+    const truncateOutput = (output: string, maxLength: number) =>
+      output.length > maxLength
+        ? output.substring(0, maxLength) + '\n\n[Output truncated]'
+        : output
 
     const timeoutId = setTimeout(() => {
       if (isResolved) return
@@ -140,10 +179,10 @@ export function codeSearch({
       }
       const partialOutput = collectedLines.join('\n')
 
-      const truncatedStdout =
-        partialOutput.length > 1000
-          ? partialOutput.substring(0, 1000) + '\n\n[Output truncated]'
-          : partialOutput
+      const truncatedStdout = truncateOutput(
+        formatCollectedOutput(partialOutput),
+        1000,
+      )
       const truncatedStderr =
         stderrBuf.length > 1000
           ? stderrBuf.substring(0, 1000) + '\n\n[Error output truncated]'
@@ -203,6 +242,9 @@ export function codeSearch({
           // For matches: only if we haven't hit the per-file limit
           // For context: always include (they don't count toward limit)
           const shouldInclude = !isMatch || fileMatchCount < maxResults
+          if (isMatch && !shouldInclude) {
+            filesLimitedByMaxResults.add(filePath)
+          }
 
           if (shouldInclude) {
             // Add the line to output
@@ -228,13 +270,10 @@ export function codeSearch({
                   limitedLines.push(...lines)
                 }
                 const rawOutput = limitedLines.join('\n')
-                const formattedOutput = formatCodeSearchOutput(rawOutput)
-
-                const finalOutput =
-                  formattedOutput.length > maxOutputStringLength
-                    ? formattedOutput.substring(0, maxOutputStringLength) +
-                      '\n\n[Output truncated]'
-                    : formattedOutput
+                const finalOutput = truncateOutput(
+                  formatCollectedOutput(rawOutput),
+                  maxOutputStringLength,
+                )
 
                 const limitReason =
                   matchesGlobal >= globalMaxResults
@@ -299,6 +338,13 @@ export function codeSearch({
                   !isMatch ||
                   (fileMatchCount < maxResults &&
                     matchesGlobal < globalMaxResults)
+                if (
+                  isMatch &&
+                  fileMatchCount >= maxResults &&
+                  matchesGlobal < globalMaxResults
+                ) {
+                  filesLimitedByMaxResults.add(filePath)
+                }
 
                 if (shouldInclude) {
                   fileLines.push(formattedLine)
@@ -321,9 +367,7 @@ export function codeSearch({
 
       for (const [filename, fileLines] of fileGroups) {
         limitedLines.push(...fileLines)
-        // Note if file was truncated (based on match count, not total lines)
-        const fileMatchCount = fileMatchCounts.get(filename) ?? 0
-        if (fileMatchCount >= maxResults) {
+        if (filesLimitedByMaxResults.has(filename)) {
           truncatedFiles.push(
             `${filename}: limited to ${maxResults} results per file`,
           )
@@ -349,14 +393,11 @@ export function codeSearch({
         rawOutput += `\n\n[${truncationMessages.join('\n\n')}]`
       }
 
-      const formattedOutput = formatCodeSearchOutput(rawOutput)
-
       // Truncate output to prevent memory issues
-      const truncatedStdout =
-        formattedOutput.length > maxOutputStringLength
-          ? formattedOutput.substring(0, maxOutputStringLength) +
-            '\n\n[Output truncated]'
-          : formattedOutput
+      const truncatedStdout = truncateOutput(
+        formatCollectedOutput(rawOutput),
+        maxOutputStringLength,
+      )
 
       const truncatedStderr = stderrBuf
         ? stderrBuf +
@@ -378,7 +419,7 @@ export function codeSearch({
     childProcess.once('error', (error) => {
       if (isResolved) return
       settle({
-        errorMessage: `Failed to execute ripgrep: ${error.message}. Vendored ripgrep not found; ensure @codebuff/sdk is up-to-date or set CODEBUFF_RG_PATH.`,
+        errorMessage: `Failed to execute ripgrep: ${error.message}. Vendored ripgrep not found; ensure @khiwniti/sdk is up-to-date or set CODEBUFF_RG_PATH.`,
       })
     })
   })

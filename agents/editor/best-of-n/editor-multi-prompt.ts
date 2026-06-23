@@ -11,7 +11,10 @@ import type { SecretAgentDefinition } from '../../types/secret-agent-definition'
 export function createMultiPromptEditor(): Omit<SecretAgentDefinition, 'id'> {
   return {
     publisher,
-    model: 'anthropic/claude-opus-4.5',
+    model: 'anthropic/claude-opus-4.8',
+    providerOptions: {
+      only: ['amazon-bedrock'],
+    },
     displayName: 'Multi-Prompt Editor',
     spawnerPrompt:
       'Edits code by spawning multiple implementor agents with different strategy prompts, selects the best implementation, and applies the changes. It also returns further suggested improvements which you should take seriously and act on. Pass as input an array of short prompts specifying different implementation approaches or strategies. Make sure to read any files intended to be edited before spawning this agent.',
@@ -206,13 +209,14 @@ function* handleStepsMultiPrompt({
   }
 
   // Extract suggested improvements from selector output
-  const { suggestedImprovements } = selectorOutput
+  const { reason, suggestedImprovements } = selectorOutput
 
   // Set output with the applied results and suggested improvements
   yield {
     toolName: 'set_output',
     input: {
       chosenStrategy: chosenImplementation.strategy,
+      reason,
       toolResults: appliedToolResults,
       suggestedImprovements,
     },

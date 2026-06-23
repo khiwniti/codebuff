@@ -15,10 +15,11 @@
     "types": ["node", "bun-types"],
     "baseUrl": ".",
     "paths": {
-      "@codebuff/common/*": ["../common/src/*"],
-      "@codebuff/agent-runtime/*": ["../packages/agent-runtime/src/*"],
-      "@codebuff/code-map": ["../packages/code-map/src/index.ts"],
-      "@codebuff/code-map/*": ["../packages/code-map/src/*"]
+      "@openbuff/common/*": ["../common/src/*"],
+      "@openbuff/agent-runtime/*": ["../packages/agent-runtime/src/*"],
+      "@openbuff/code-map": ["../packages/code-map/src/index.ts"],
+      "@openbuff/code-map/*": ["../packages/code-map/src/*"],
+      "@openbuff/llm-providers/*": ["../packages/llm-providers/src/*"]
     }
   },
   "include": ["src/**/*.ts"],

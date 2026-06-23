@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 
 import { runBuffBench } from './run-buffbench'
+
 import type { EvalDataV2 } from './types'
 
 // Load task IDs from an eval file
@@ -12,6 +13,8 @@ function loadTaskIds(evalPath: string): string[] {
 }
 
 async function main() {
+  const saveTraces = process.argv.includes('--save-traces')
+
   const evalPaths = [
     path.join(__dirname, 'eval-codebuff2.json'),
     path.join(__dirname, 'eval-manifold2.json'),
@@ -32,6 +35,7 @@ async function main() {
     agents: ['base2', 'external:claude'],
     taskIds: allTaskIds,
     taskConcurrency: 4,
+    saveTraces,
   })
 
   process.exit(0)

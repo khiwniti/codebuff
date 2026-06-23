@@ -1,5 +1,5 @@
 import type { ChatTheme } from './theme-system'
-import type { ToolName } from '@codebuff/sdk'
+import type { ToolName } from '@khiwniti/sdk'
 import type { ReactNode } from 'react'
 
 /**
@@ -9,6 +9,8 @@ import type { ReactNode } from 'react'
  */
 
 export type ChatVariant = 'ai' | 'user' | 'agent' | 'error'
+
+export type ThinkingCollapseState = 'expanded' | 'preview' | 'hidden'
 
 export type TextContentBlock = {
   type: 'text'
@@ -23,6 +25,7 @@ export type TextContentBlock = {
   userOpened?: boolean
   /** True if this is a reasoning block from a <think> tag that hasn't been closed yet */
   thinkingOpen?: boolean
+  thinkingCollapseState?: ThinkingCollapseState
 }
 /** Renders dynamic React content. NOT serializable - don't use for persistent data. */
 export type HtmlContentBlock = {
@@ -130,6 +133,13 @@ export type TextAttachment = {
   charCount: number
 }
 
+export type FileAttachment = {
+  path: string
+  filename: string
+  isDirectory: boolean
+  note?: string
+}
+
 export type ContentBlock =
   | AgentContentBlock
   | AgentListContentBlock
@@ -181,6 +191,7 @@ export type ChatMessage = {
   userError?: string
   attachments?: ImageAttachment[]
   textAttachments?: TextAttachment[]
+  fileAttachments?: FileAttachment[]
 }
 
 // Type guard functions for safe type narrowing

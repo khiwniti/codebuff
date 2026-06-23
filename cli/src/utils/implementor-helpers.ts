@@ -25,6 +25,18 @@ const isProposedToolName = (toolName: ToolContentBlock['toolName']): boolean =>
 const getBaseToolName = (toolName: ToolContentBlock['toolName']): string =>
   isProposedToolName(toolName) ? toolName.slice('propose_'.length) : toolName
 
+const SUCCESSFUL_EDIT_MESSAGES = [
+  'String replace applied successfully',
+  'Created file successfully',
+  'Created new file',
+  'Overwrote file successfully',
+  'Wrote file successfully',
+  'Updated file',
+  'Proposed new file',
+  'Proposed changes',
+  'Proposed string replacement',
+] as const
+
 const hasProposedTools = (blocks?: ContentBlock[]): boolean => {
   if (!blocks || blocks.length === 0) return false
 
@@ -221,38 +233,61 @@ export function extractFilePath(toolBlock: ToolContentBlock): string | null {
  * For proposed tools (implementors): construct diff from input replacements.
  */
 export function extractDiff(toolBlock: ToolContentBlock): string | null {
+  let hasSuccessfulOutput = false
+
   // First try to get from outputRaw (for executed tool results)
   // outputRaw is typically an array like [{type: "json", value: {unifiedDiff: "..."}}]
   const outputRaw = toolBlock.outputRaw as unknown
   if (Array.isArray(outputRaw) && outputRaw[0]?.value) {
     const value = outputRaw[0].value as Record<string, unknown>
+    if (hasErrorMessage(value)) return null
+    if (isSuccessfulEditMessage(value.message)) hasSuccessfulOutput = true
     if (value.unifiedDiff) return value.unifiedDiff as string
     if (value.patch) return value.patch as string
   }
   // Also check direct properties (in case format differs)
   if (typeof outputRaw === 'object' && outputRaw !== null) {
     const rawObj = outputRaw as Record<string, unknown>
+    if (hasErrorMessage(rawObj)) return null
+    if (isSuccessfulEditMessage(rawObj.message)) hasSuccessfulOutput = true
     if (rawObj.unifiedDiff) return rawObj.unifiedDiff as string
     if (rawObj.patch) return rawObj.patch as string
   }
 
   // Try to get from output string (key: value format)
   const outputStr = typeof toolBlock.output === 'string' ? toolBlock.output : ''
+  const message = extractValueForKey(outputStr, 'message')
   const diffFromOutput =
     extractValueForKey(outputStr, 'unifiedDiff') ||
     extractValueForKey(outputStr, 'patch')
+
+  if (hasFailedEditOutput({ outputStr, message, diffFromOutput })) {
+    return null
+  }
+  if (isSuccessfulEditMessage(message)) {
+    hasSuccessfulOutput = true
+  }
 
   if (diffFromOutput) {
     return diffFromOutput
   }
 
-  // For proposed edits (no output yet): construct diff from input
+  // For proposed/pending edits, or confirmed successful executions, construct
+  // the preview from input when the result omits a diff.
+  const canUseInputFallback =
+    isProposedToolName(toolBlock.toolName) ||
+    outputStr === '' ||
+    hasSuccessfulOutput
+  if (!canUseInputFallback) {
+    return null
+  }
+
   const input = toolBlock.input as Record<string, unknown>
   const baseToolName = getBaseToolName(toolBlock.toolName)
 
   // Handle str_replace: construct diff from replacements
   if (baseToolName === 'str_replace' && Array.isArray(input?.replacements)) {
-    const replacements = input.replacements as { old: string; new: string }[]
+    const replacements = input.replacements as ReplacementInput[]
     if (replacements.length > 0) {
       return constructDiffFromReplacements(replacements)
     }
@@ -271,22 +306,96 @@ export function extractDiff(toolBlock: ToolContentBlock): string | null {
   return null
 }
 
+function hasErrorMessage(value: Record<string, unknown>): boolean {
+  return Boolean(value.errorMessage || (value.value as any)?.errorMessage)
+}
+
+function hasFailedEditOutput(params: {
+  outputStr: string
+  message: string | null
+  diffFromOutput: string | null
+}): boolean {
+  const { outputStr, message, diffFromOutput } = params
+  const trimmedOutput = outputStr.trim()
+  if (!trimmedOutput) {
+    return false
+  }
+  if (
+    extractValueForKey(outputStr, 'errorMessage') ||
+    isErrorOutput(outputStr)
+  ) {
+    return true
+  }
+  if (diffFromOutput || isSuccessfulEditMessage(message)) {
+    return false
+  }
+  return !isSuccessfulEditMessage(trimmedOutput)
+}
+
+function isFailedEditToolBlock(toolBlock: ToolContentBlock): boolean {
+  const outputRaw = toolBlock.outputRaw as unknown
+  if (Array.isArray(outputRaw) && outputRaw[0]?.value) {
+    const value = outputRaw[0].value as Record<string, unknown>
+    if (hasErrorMessage(value)) return true
+  }
+  if (typeof outputRaw === 'object' && outputRaw !== null) {
+    const rawObj = outputRaw as Record<string, unknown>
+    if (hasErrorMessage(rawObj)) return true
+  }
+
+  const outputStr = typeof toolBlock.output === 'string' ? toolBlock.output : ''
+  const message = extractValueForKey(outputStr, 'message')
+  const diffFromOutput =
+    extractValueForKey(outputStr, 'unifiedDiff') ||
+    extractValueForKey(outputStr, 'patch')
+  return hasFailedEditOutput({ outputStr, message, diffFromOutput })
+}
+
+function isSuccessfulEditMessage(message: unknown): boolean {
+  if (typeof message !== 'string') {
+    return false
+  }
+
+  return message
+    .split('\n')
+    .some((line) =>
+      SUCCESSFUL_EDIT_MESSAGES.some((successMessage) =>
+        line.trim().startsWith(successMessage),
+      ),
+    )
+}
+
+function isErrorOutput(output: string): boolean {
+  const trimmedOutput = output.trim()
+  return trimmedOutput.startsWith('Error:') || trimmedOutput.startsWith('Failed ')
+}
+
 /**
  * Construct a simple diff view from str_replace replacements.
  */
+type ReplacementInput = {
+  oldString?: string
+  newString?: string
+  old?: string
+  new?: string
+}
+
 function constructDiffFromReplacements(
-  replacements: { old: string; new: string }[],
+  replacements: ReplacementInput[],
 ): string {
   const lines: string[] = []
 
   for (const replacement of replacements) {
+    const oldString = replacement.oldString ?? replacement.old ?? ''
+    const newString = replacement.newString ?? replacement.new ?? ''
+
     // Add old lines as removals
-    const oldLines = replacement.old.split('\n')
+    const oldLines = oldString.split('\n')
     for (const line of oldLines) {
       lines.push(`- ${line}`)
     }
     // Add new lines as additions
-    const newLines = replacement.new.split('\n')
+    const newLines = newString.split('\n')
     for (const line of newLines) {
       lines.push(`+ ${line}`)
     }
@@ -315,9 +424,37 @@ export function isCreateFile(toolBlock: ToolContentBlock): boolean {
   const message = extractValueForKey(outputStr, 'message')
   return (
     typeof message === 'string' &&
-    (message.startsWith('Created new file') ||
+    (message.startsWith('Created file successfully') ||
+      message.startsWith('Created new file') ||
       message.startsWith('Proposed new file'))
   )
+}
+
+function hasToolResultOutput(toolBlock: ToolContentBlock): boolean {
+  const outputStr = typeof toolBlock.output === 'string' ? toolBlock.output : ''
+  return outputStr.length > 0 || toolBlock.outputRaw !== undefined
+}
+
+/**
+ * Decide whether the direct edit tool renderer should show a diff preview.
+ *
+ * Real edit tool calls render immediately with input only, then receive output
+ * once the edit completes. Wait for that result before showing diffs so create
+ * operations never briefly flash an input-derived full-file diff.
+ */
+export function shouldShowEditDiff(toolBlock: ToolContentBlock): boolean {
+  if (!extractDiff(toolBlock) || isCreateFile(toolBlock)) {
+    return false
+  }
+
+  if (
+    !isProposedToolName(toolBlock.toolName) &&
+    !hasToolResultOutput(toolBlock)
+  ) {
+    return false
+  }
+
+  return true
 }
 
 export interface TimelineItem {
@@ -400,7 +537,9 @@ export function getFileChangeType(toolBlock: ToolContentBlock): FileChangeType {
  * Get aggregated file stats from all edit blocks.
  * Groups by file path and sums up the stats.
  */
-export function getFileStatsFromBlocks(blocks: ContentBlock[] | undefined): FileStats[] {
+export function getFileStatsFromBlocks(
+  blocks: ContentBlock[] | undefined,
+): FileStats[] {
   if (!blocks || blocks.length === 0) return []
 
   const fileMap = new Map<string, FileStats>()
@@ -408,8 +547,12 @@ export function getFileStatsFromBlocks(blocks: ContentBlock[] | undefined): File
   for (const block of blocks) {
     if (
       block.type === 'tool' &&
-      ALL_EDIT_TOOL_NAMES.includes(block.toolName as (typeof ALL_EDIT_TOOL_NAMES)[number])
+      ALL_EDIT_TOOL_NAMES.includes(
+        block.toolName as (typeof ALL_EDIT_TOOL_NAMES)[number],
+      )
     ) {
+      if (isFailedEditToolBlock(block)) continue
+
       const filePath = extractFilePath(block)
       if (!filePath) continue
 
@@ -456,8 +599,12 @@ export function buildActivityTimeline(
       }
     } else if (
       block.type === 'tool' &&
-      ALL_EDIT_TOOL_NAMES.includes(block.toolName as (typeof ALL_EDIT_TOOL_NAMES)[number])
+      ALL_EDIT_TOOL_NAMES.includes(
+        block.toolName as (typeof ALL_EDIT_TOOL_NAMES)[number],
+      )
     ) {
+      if (isFailedEditToolBlock(block)) continue
+
       const filePath = extractFilePath(block)
       const diff = extractDiff(block)
       const isCreate = isCreateFile(block)
@@ -481,4 +628,160 @@ export function truncateWithEllipsis(text: string, maxWidth: number): string {
   if (text.length <= maxWidth) return text
   if (maxWidth <= 3) return text.slice(0, maxWidth)
   return text.slice(0, maxWidth - 3) + '...'
+}
+
+export interface MultiPromptProgress {
+  /** Total number of implementor agents */
+  total: number
+  /** Number of successfully completed implementors */
+  completed: number
+  /** Number of failed/errored implementors */
+  failed: number
+  /** Whether selector is active (all implementors done, selecting best) */
+  isSelecting: boolean
+  /** Whether selector has completed (used to detect applying phase) */
+  isSelectorComplete: boolean
+}
+
+/**
+ * Analyze progress of a multi-prompt editor agent.
+ * Returns counts of implementor agents and current phase.
+ */
+export function getMultiPromptProgress(
+  blocks: ContentBlock[] | undefined,
+): MultiPromptProgress | null {
+  if (!blocks || blocks.length === 0) return null
+
+  const implementors = blocks.filter(
+    (block): block is AgentContentBlock =>
+      block.type === 'agent' && isImplementorAgent(block),
+  )
+
+  if (implementors.length === 0) return null
+
+  const completed = implementors.filter((a) => a.status === 'complete').length
+  const failed = implementors.filter(
+    (a) => a.status === 'failed' || a.status === 'cancelled',
+  ).length
+
+  const selectorAgent = blocks.find(
+    (block): block is AgentContentBlock =>
+      block.type === 'agent' && block.agentType.includes('best-of-n-selector'),
+  )
+  const isSelecting = selectorAgent?.status === 'running'
+
+  return {
+    total: implementors.length,
+    completed,
+    failed,
+    isSelecting,
+    isSelectorComplete: selectorAgent?.status === 'complete',
+  }
+}
+
+/** Expected shape of the set_output data from editor-multi-prompt */
+interface MultiPromptSetOutputData {
+  implementationId?: string
+  chosenStrategy?: string
+  reason?: string
+  suggestedImprovements?: string
+  toolResults?: unknown[]
+  error?: string
+}
+
+/** Expected shape of the set_output input (data is wrapped in a 'data' property) */
+interface SetOutputInput {
+  data?: MultiPromptSetOutputData
+}
+
+/** Type guard for set_output input with data property */
+function hasSetOutputData(input: unknown): input is SetOutputInput {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    'data' in input &&
+    typeof (input as SetOutputInput).data === 'object'
+  )
+}
+
+/**
+ * Extract the selection reason from multi-prompt agent's set_output block.
+ * set_output wraps data in a 'data' property, so we need to access input.data.reason
+ */
+function extractSelectionReason(
+  blocks: ContentBlock[] | undefined,
+): string | null {
+  if (!blocks || blocks.length === 0) return null
+
+  const setOutputBlock = blocks.find(
+    (block): block is ToolContentBlock =>
+      block.type === 'tool' &&
+      block.toolName === 'set_output' &&
+      hasSetOutputData(block.input) &&
+      typeof block.input.data?.reason === 'string',
+  )
+
+  if (!setOutputBlock || !hasSetOutputData(setOutputBlock.input)) {
+    return null
+  }
+
+  return setOutputBlock.input.data?.reason ?? null
+}
+
+/**
+ * Generate a progress-focused preview string for multi-prompt editor.
+ * @param blocks - The nested content blocks of the agent
+ * @param isAgentComplete - Whether the parent agent has finished (status === 'complete')
+ */
+export function getMultiPromptPreview(
+  blocks: ContentBlock[] | undefined,
+  isAgentComplete?: boolean,
+): string | null {
+  const progress = getMultiPromptProgress(blocks)
+  if (!progress) return null
+
+  const { total, completed, failed, isSelecting, isSelectorComplete } = progress
+  const finished = completed + failed
+
+  // Agent is fully complete - show final state with selection info
+  // Use multi-line format: line 1 = count, lines 2-3 = reason (truncated to fit)
+  if (isAgentComplete) {
+    const reason = extractSelectionReason(blocks)
+    if (reason) {
+      // Capitalize first letter and truncate to 2 lines (line 1 is the count)
+      const formattedReason = reason.charAt(0).toUpperCase() + reason.slice(1)
+      const lines = formattedReason.split('\n')
+      const truncatedReason =
+        lines.length > 2
+          ? lines.slice(0, 2).join('\n').trimEnd() + '...'
+          : formattedReason
+      return `${total} proposals evaluated\n${truncatedReason}`
+    }
+    return `${total} proposals evaluated`
+  }
+
+  // Selector completed but agent still running = applying phase
+  if (isSelectorComplete) {
+    return 'Applying selected changes...'
+  }
+
+  if (isSelecting) {
+    return `${total} proposals complete • Selecting best...`
+  }
+
+  if (finished === total && total > 0) {
+    if (failed > 0) {
+      return `${completed}/${total} proposals complete (${failed} failed)`
+    }
+    return `${total} proposals complete`
+  }
+
+  if (finished > 0) {
+    if (failed > 0) {
+      return `${completed}/${total} complete, ${failed} failed...`
+    }
+    return `${completed}/${total} proposals complete...`
+  }
+
+  return `Generating ${total} proposals...`
 }

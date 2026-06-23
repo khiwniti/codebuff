@@ -1,13 +1,16 @@
-import { validateAgents } from '@codebuff/common/templates/agent-validation'
-import { parsePublishedAgentId } from '@codebuff/common/util/agent-id-parsing'
-import { DEFAULT_ORG_PREFIX } from '@codebuff/common/util/agent-name-normalization'
+import { validateAgents } from '@khiwniti/common/templates/agent-validation'
+import {
+  normalizeAgentIdForLookup,
+  parsePublishedAgentId,
+} from '@khiwniti/common/util/agent-id-parsing'
+import { DEFAULT_ORG_PREFIX } from '@khiwniti/common/util/agent-name-normalization'
 
-import type { DynamicAgentValidationError } from '@codebuff/common/templates/agent-validation'
-import type { AgentTemplate } from '@codebuff/common/types/agent-template'
-import type { FetchAgentFromDatabaseFn } from '@codebuff/common/types/contracts/database'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+import type { DynamicAgentValidationError } from '@khiwniti/common/templates/agent-validation'
+import type { AgentTemplate } from '@khiwniti/common/types/agent-template'
+import type { FetchAgentFromDatabaseFn } from '@khiwniti/common/types/contracts/database'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 
 /**
  * Single function to look up an agent template with clear priority order:
@@ -31,20 +34,32 @@ export async function getAgentTemplate(
     databaseAgentCache,
     logger,
   } = params
+  const normalizedAgentId = normalizeAgentIdForLookup(agentId)
+
   // 1. Check localAgentTemplates first (dynamic agents + static templates)
   if (localAgentTemplates[agentId]) {
     return localAgentTemplates[agentId]
   }
+  if (normalizedAgentId !== agentId && localAgentTemplates[normalizedAgentId]) {
+    return localAgentTemplates[normalizedAgentId]
+  }
+
   // 2. Check database cache
   if (databaseAgentCache.has(agentId)) {
     return databaseAgentCache.get(agentId) || null
   }
+  if (
+    normalizedAgentId !== agentId &&
+    databaseAgentCache.has(normalizedAgentId)
+  ) {
+    return databaseAgentCache.get(normalizedAgentId) || null
+  }
 
-  const parsed = parsePublishedAgentId(agentId)
+  const parsed = parsePublishedAgentId(normalizedAgentId)
   if (!parsed) {
     // If agentId doesn't parse as publisher/agent format, try as codebuff/agentId
     const codebuffParsed = parsePublishedAgentId(
-      `${DEFAULT_ORG_PREFIX}${agentId}`,
+      `${DEFAULT_ORG_PREFIX}${normalizedAgentId}`,
     )
     if (codebuffParsed) {
       const dbAgent = await fetchAgentFromDatabase({

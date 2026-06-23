@@ -3,7 +3,8 @@ import {
   PLACEHOLDER,
   type SecretAgentDefinition,
 } from '../types/secret-agent-definition'
-import type { Model } from '@codebuff/common/old-constants'
+
+import type { Model } from '@khiwniti/common/old-constants'
 
 export const createReviewer = (
   model: Model,
@@ -63,7 +64,10 @@ Be extremely concise.`,
 const definition: SecretAgentDefinition = {
   id: 'code-reviewer',
   publisher,
-  ...createReviewer('anthropic/claude-opus-4.5'),
+  ...createReviewer('anthropic/claude-opus-4.8'),
+  providerOptions: {
+    only: ['amazon-bedrock'],
+  },
 }
 
 export default definition

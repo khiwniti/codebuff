@@ -2,8 +2,8 @@ import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { AgentState } from '@codebuff/common/types/session-state'
+} from '@khiwniti/common/tools/list'
+import type { AgentState } from '@khiwniti/common/types/session-state'
 
 export const handleSetMessages = (async (params: {
   previousToolCallFinished: Promise<void>

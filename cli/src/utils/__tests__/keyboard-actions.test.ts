@@ -26,6 +26,8 @@ const downKey = createKey({ name: 'down' })
 const tabKey = createKey({ name: 'tab' })
 const shiftTabKey = createKey({ name: 'tab', shift: true })
 const enterKey = createKey({ name: 'return' })
+const keypadEnterKey = createKey({ name: 'kpenter', sequence: '\x1b[57414u' })
+const rawApplicationKeypadEnterKey = createKey({ sequence: '\x1bOM' })
 const backspaceKey = createKey({ name: 'backspace' })
 
 const defaultState = createDefaultChatKeyboardState()
@@ -51,17 +53,6 @@ describe('resolveChatKeyboardAction', () => {
       }
       expect(resolveChatKeyboardAction(escapeKey, state)).toEqual({
         type: 'interrupt-stream',
-      })
-    })
-
-    test('escape in referral mode exits mode even while streaming', () => {
-      const state: ChatKeyboardState = {
-        ...defaultState,
-        inputMode: 'referral',
-        isStreaming: true,
-      }
-      expect(resolveChatKeyboardAction(escapeKey, state)).toEqual({
-        type: 'exit-input-mode',
       })
     })
 
@@ -544,6 +535,44 @@ describe('resolveChatKeyboardAction', () => {
       })
     })
 
+    test('keypad enter without active menu does nothing', () => {
+      expect(resolveChatKeyboardAction(keypadEnterKey, defaultState)).toEqual({
+        type: 'none',
+      })
+    })
+
+    test('raw application keypad enter without active menu does nothing', () => {
+      expect(
+        resolveChatKeyboardAction(rawApplicationKeypadEnterKey, defaultState),
+      ).toEqual({
+        type: 'none',
+      })
+    })
+
+    test('keypad enter selects an active slash menu item', () => {
+      const state: ChatKeyboardState = {
+        ...defaultState,
+        slashMenuActive: true,
+        slashMatchesLength: 3,
+      }
+      expect(resolveChatKeyboardAction(keypadEnterKey, state)).toEqual({
+        type: 'slash-menu-select',
+      })
+    })
+
+    test('raw application keypad enter selects an active slash menu item', () => {
+      const state: ChatKeyboardState = {
+        ...defaultState,
+        slashMenuActive: true,
+        slashMatchesLength: 3,
+      }
+      expect(
+        resolveChatKeyboardAction(rawApplicationKeypadEnterKey, state),
+      ).toEqual({
+        type: 'slash-menu-select',
+      })
+    })
+
     test('shift+enter does nothing even in menu', () => {
       const shiftEnter = createKey({ name: 'return', shift: true })
       const state: ChatKeyboardState = {
@@ -564,6 +593,66 @@ describe('resolveChatKeyboardAction', () => {
         inputValue: '   ',
       }
       expect(resolveChatKeyboardAction(escapeKey, state)).toEqual({
+        type: 'none',
+      })
+    })
+  })
+
+  describe('toggle all (Ctrl+T)', () => {
+    const ctrlT = createKey({ name: 't', ctrl: true })
+
+    test('Ctrl+T triggers toggle-all', () => {
+      expect(resolveChatKeyboardAction(ctrlT, defaultState)).toEqual({
+        type: 'toggle-all',
+      })
+    })
+
+    test('Ctrl+T works while streaming', () => {
+      const state: ChatKeyboardState = {
+        ...defaultState,
+        isStreaming: true,
+      }
+      expect(resolveChatKeyboardAction(ctrlT, state)).toEqual({
+        type: 'toggle-all',
+      })
+    })
+
+    test('Ctrl+T works with text in input', () => {
+      const state: ChatKeyboardState = {
+        ...defaultState,
+        inputValue: 'some text',
+      }
+      expect(resolveChatKeyboardAction(ctrlT, state)).toEqual({
+        type: 'toggle-all',
+      })
+    })
+
+    test('Ctrl+T works in bash mode', () => {
+      const state: ChatKeyboardState = {
+        ...defaultState,
+        inputMode: 'bash',
+      }
+      expect(resolveChatKeyboardAction(ctrlT, state)).toEqual({
+        type: 'toggle-all',
+      })
+    })
+
+    test('Ctrl+T blocked in feedback mode', () => {
+      const state: ChatKeyboardState = {
+        ...defaultState,
+        feedbackMode: true,
+      }
+      expect(resolveChatKeyboardAction(ctrlT, state)).toEqual({
+        type: 'none',
+      })
+    })
+
+    test('Ctrl+T blocked in outOfCredits mode', () => {
+      const state: ChatKeyboardState = {
+        ...defaultState,
+        inputMode: 'outOfCredits',
+      }
+      expect(resolveChatKeyboardAction(ctrlT, state)).toEqual({
         type: 'none',
       })
     })

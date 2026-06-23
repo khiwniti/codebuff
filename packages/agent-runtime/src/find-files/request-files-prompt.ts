@@ -4,9 +4,10 @@ import {
   finetunedVertexModels,
   models,
   type FinetunedVertexModel,
-} from '@codebuff/common/old-constants'
-import { getAllFilePaths } from '@codebuff/common/project-file-tree'
-import { systemMessage, userMessage } from '@codebuff/common/util/messages'
+} from '@khiwniti/common/old-constants'
+import { getAllFilePaths } from '@khiwniti/common/project-file-tree'
+import { isAbortError, unwrapPromptResult } from '@khiwniti/common/util/error'
+import { systemMessage, userMessage } from '@khiwniti/common/util/messages'
 import { range, shuffle, uniq } from 'lodash'
 
 import { promptFlashWithFallbacks } from '../llm-api/gemini-with-fallbacks'
@@ -17,11 +18,11 @@ import {
 } from '../util/messages'
 
 import type { TextBlock } from '../llm-api/claude'
-import type { PromptAiSdkFn } from '@codebuff/common/types/contracts/llm'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { Message } from '@codebuff/common/types/messages/codebuff-message'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+import type { PromptAiSdkFn } from '@khiwniti/common/types/contracts/llm'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { Message } from '@khiwniti/common/types/messages/codebuff-message'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 
 const NUMBER_OF_EXAMPLE_FILES = 100
 const MAX_FILES_PER_REQUEST = 30
@@ -77,6 +78,10 @@ export async function requestRelevantFiles(
     requestType: 'Key',
     modelId: modelIdForRequest,
   }).catch((error) => {
+    // Don't swallow abort errors - propagate them immediately
+    if (isAbortError(error)) {
+      throw error
+    }
     logger.error({ error }, 'Error requesting key files')
     return { files: [] as string[], duration: 0 }
   })
@@ -183,12 +188,12 @@ async function getRelevantFiles(
     system,
     userPrompt,
     requestType,
-    agentStepId,
-    clientSessionId,
-    fingerprintId,
-    userInputId,
-    userId,
-    repoId,
+    agentStepId: _agentStepId,
+    clientSessionId: _clientSessionId,
+    fingerprintId: _fingerprintId,
+    userInputId: _userInputId,
+    userId: _userId,
+    repoId: _repoId,
     modelId,
     logger,
   } = params
@@ -227,6 +232,11 @@ async function getRelevantFiles(
   return { files, duration, requestType, response }
 }
 
+/**
+ * Gets relevant files for training using Claude Sonnet.
+ *
+ * @throws {Error} When the request is aborted by user. Check with `isAbortError()`.
+ */
 async function getRelevantFilesForTraining(
   params: {
     messages: Message[]
@@ -248,12 +258,12 @@ async function getRelevantFilesForTraining(
     system,
     userPrompt,
     requestType,
-    agentStepId,
-    clientSessionId,
-    fingerprintId,
-    userInputId,
-    userId,
-    repoId,
+    agentStepId: _agentStepId,
+    clientSessionId: _clientSessionId,
+    fingerprintId: _fingerprintId,
+    userInputId: _userInputId,
+    userId: _userId,
+    repoId: _repoId,
     promptAiSdk,
     logger,
   } = params
@@ -264,13 +274,14 @@ async function getRelevantFilesForTraining(
     logger,
   })
   const start = performance.now()
-  let response = await promptAiSdk({
-    ...params,
-    messages: messagesWithSystem({ messages: messagesWithPrompt, system }),
-    model: models.openrouter_claude_sonnet_4,
-    chargeUser: false,
-  })
-
+  const response = unwrapPromptResult(
+    await promptAiSdk({
+      ...params,
+      messages: messagesWithSystem({ messages: messagesWithPrompt, system }),
+      model: models.openrouter_claude_sonnet_4,
+      chargeUser: false,
+    }),
+  )
   const end = performance.now()
   const duration = end - start
 

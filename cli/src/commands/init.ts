@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import path from 'path'
 
-import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
-import { PRIMARY_KNOWLEDGE_FILE_NAME } from '@codebuff/common/constants/knowledge'
+import { AnalyticsEvent } from '@khiwniti/common/constants/analytics-events'
+import { PRIMARY_KNOWLEDGE_FILE_NAME } from '@khiwniti/common/constants/knowledge'
 
 // @ts-expect-error - Bun text import attribute not supported by TypeScript
 import agentDefinitionSource from '../../../common/src/templates/initial-agents-dir/types/agent-definition' with { type: 'text' }
@@ -10,16 +10,18 @@ import agentDefinitionSource from '../../../common/src/templates/initial-agents-
 import toolsSource from '../../../common/src/templates/initial-agents-dir/types/tools' with { type: 'text' }
 // @ts-expect-error - Bun text import attribute not supported by TypeScript
 import utilTypesSource from '../../../common/src/templates/initial-agents-dir/types/util-types' with { type: 'text' }
-
 import { getProjectRoot } from '../project-files'
 import { trackEvent } from '../utils/analytics'
+import { IS_FREEBUFF } from '../utils/constants'
 import { getSystemMessage } from '../utils/message-history'
 
 import type { PostUserMessageFn } from '../types/contracts/send-message'
 
+const brandName = IS_FREEBUFF ? 'Freebuff' : 'Codebuff'
+
 const INITIAL_KNOWLEDGE_FILE = `# Project knowledge
 
-This file gives Codebuff context about your project: goals, commands, conventions, and gotchas.
+This file gives ${brandName} context about your project: goals, commands, conventions, and gotchas.
 
 ## Quickstart
 - Setup:

@@ -3,12 +3,12 @@ import { convertJsonSchemaToZod } from 'zod-from-json-schema'
 import { MCP_TOOL_SEPARATOR } from './mcp-constants'
 
 import type { AgentTemplate } from './templates/types'
-import type { RequestMcpToolDataFn } from '@codebuff/common/types/contracts/client'
-import type { OptionalFields } from '@codebuff/common/types/function-params'
+import type { RequestMcpToolDataFn } from '@khiwniti/common/types/contracts/client'
+import type { OptionalFields } from '@khiwniti/common/types/function-params'
 import type {
   CustomToolDefinitions,
   ProjectFileContext,
-} from '@codebuff/common/util/file'
+} from '@khiwniti/common/util/file'
 
 export async function getMCPToolData(
   params: OptionalFields<

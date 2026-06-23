@@ -1,6 +1,8 @@
 import { useKeyboard } from '@opentui/react'
 import { useCallback } from 'react'
 
+import { isPlainEnterKey } from '../utils/terminal-enter-detection'
+
 import type { KeyEvent } from '@opentui/core'
 
 interface UseLoginKeyboardHandlersParams {
@@ -8,7 +10,7 @@ interface UseLoginKeyboardHandlersParams {
   hasOpenedBrowser: boolean
   loading: boolean
   onFetchLoginUrl: () => void
-  onCopyUrl: (url: string) => void
+  onCopyUrl: (url: string) => Promise<void> | void
 }
 
 /**
@@ -27,11 +29,7 @@ export function useLoginKeyboardHandlers({
   useKeyboard(
     useCallback(
       (key: KeyEvent) => {
-        const isEnter =
-          (key.name === 'return' || key.name === 'enter') &&
-          !key.ctrl &&
-          !key.meta &&
-          !key.shift
+        const isEnter = isPlainEnterKey(key)
 
         const isCKey = key.name === 'c' && !key.ctrl && !key.meta && !key.shift
         const isCtrlC = key.ctrl && key.name === 'c'
@@ -65,7 +63,9 @@ export function useLoginKeyboardHandlers({
             key.preventDefault()
           }
 
-          onCopyUrl(loginUrl)
+          // Fire-and-forget the async copy function with .catch() to prevent
+          // unhandled promise rejections if the implementation changes
+          void Promise.resolve(onCopyUrl(loginUrl)).catch(() => {})
         }
       },
       [loginUrl, hasOpenedBrowser, loading, onCopyUrl, onFetchLoginUrl],

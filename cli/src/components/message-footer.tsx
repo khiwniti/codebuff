@@ -1,10 +1,17 @@
-import { pluralize } from '@codebuff/common/util/string'
+import { SUBSCRIPTION_DISPLAY_NAME } from '@khiwniti/common/constants/subscription-plans'
+import { IS_FREEBUFF } from '../utils/constants'
+import { pluralize } from '@khiwniti/common/util/string'
 import { TextAttributes } from '@opentui/core'
 import React, { useCallback, useMemo } from 'react'
 
 import { CopyButton } from './copy-button'
 import { ElapsedTimer } from './elapsed-timer'
 import { FeedbackIconButton } from './feedback-icon-button'
+import { useSubscriptionQuery } from '../hooks/use-subscription-query'
+import {
+  getBlockPercentRemaining,
+  isCoveredBySubscription,
+} from '../utils/subscription'
 import { useTheme } from '../hooks/use-theme'
 import {
   useFeedbackStore,
@@ -154,22 +161,10 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
       ),
     })
   }
-  if (typeof credits === 'number' && credits > 0) {
+  if (typeof credits === 'number' && credits > 0 && !IS_FREEBUFF) {
     footerItems.push({
       key: 'credits',
-      node: (
-        <text
-          attributes={TextAttributes.DIM}
-          style={{
-            wrapMode: 'none',
-            fg: theme.secondary,
-            marginTop: 0,
-            marginBottom: 0,
-          }}
-        >
-          {pluralize(credits, 'credit')}
-        </text>
-      ),
+      node: <CreditsOrSubscriptionIndicator credits={credits} />,
     })
   }
   if (shouldRenderFeedbackButton) {
@@ -220,5 +215,44 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
         </React.Fragment>
       ))}
     </box>
+  )
+}
+
+const CreditsOrSubscriptionIndicator: React.FC<{ credits: number }> = ({ credits }) => {
+  const theme = useTheme()
+  const { data: subscriptionData } = useSubscriptionQuery({
+    refetchInterval: false,
+    refetchOnActivity: false,
+    pauseWhenIdle: false,
+  })
+
+  const blockPercentRemaining = useMemo(
+    () => getBlockPercentRemaining(subscriptionData),
+    [subscriptionData],
+  )
+
+  const showSubscriptionIndicator = isCoveredBySubscription(subscriptionData)
+
+  if (showSubscriptionIndicator) {
+    const label = (blockPercentRemaining ?? 0) < 20
+      ? `✓ ${SUBSCRIPTION_DISPLAY_NAME} (${blockPercentRemaining}% left)`
+      : `✓ ${SUBSCRIPTION_DISPLAY_NAME}`
+    return (
+      <text
+        attributes={TextAttributes.DIM}
+        style={{ wrapMode: 'none', fg: theme.success, marginTop: 0, marginBottom: 0 }}
+      >
+        {label}
+      </text>
+    )
+  }
+
+  return (
+    <text
+      attributes={TextAttributes.DIM}
+      style={{ wrapMode: 'none', fg: theme.secondary, marginTop: 0, marginBottom: 0 }}
+    >
+      {pluralize(credits, 'credit')}
+    </text>
   )
 }

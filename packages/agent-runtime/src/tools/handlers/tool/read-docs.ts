@@ -1,4 +1,4 @@
-import { jsonToolResult } from '@codebuff/common/util/messages'
+import { jsonToolResult } from '@khiwniti/common/util/messages'
 
 import { callDocsSearchAPI } from '../../../llm-api/codebuff-web-api'
 
@@ -7,10 +7,10 @@ import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { ClientEnv, CiEnv } from '@codebuff/common/types/contracts/env'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
+} from '@khiwniti/common/tools/list'
+import type { ClientEnv, CiEnv } from '@khiwniti/common/types/contracts/env'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
 
 export const handleReadDocs = (async (
   params: {

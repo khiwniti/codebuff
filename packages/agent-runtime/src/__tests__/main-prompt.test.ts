@@ -1,14 +1,13 @@
-import * as bigquery from '@codebuff/bigquery'
-import * as analytics from '@codebuff/common/analytics'
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
+import * as analytics from '@khiwniti/common/analytics'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { createTestAgentRuntimeParams } from '@khiwniti/common/testing/fixtures/agent-runtime'
+import { promptSuccess } from '@khiwniti/common/util/error'
 import {
   AgentTemplateTypes,
   getInitialSessionState,
-} from '@codebuff/common/types/session-state'
+} from '@khiwniti/common/types/session-state'
 import {
   afterEach,
-  beforeAll,
   beforeEach,
   describe,
   expect,
@@ -19,21 +18,21 @@ import {
 
 import { mainPrompt } from '../main-prompt'
 import * as processFileBlockModule from '../process-file-block'
+import { createToolCallChunk } from './test-utils'
 
-import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import type { AgentTemplate } from '@khiwniti/common/types/agent-template'
 import type {
   RequestFilesFn,
   RequestOptionalFileFn,
   RequestToolCallFn,
-} from '@codebuff/common/types/contracts/client'
-import type { ParamsOf } from '@codebuff/common/types/function-params'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+} from '@khiwniti/common/types/contracts/client'
+import type { ParamsOf } from '@khiwniti/common/types/function-params'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 
 let mainPromptBaseParams: any
 
-import { createToolCallChunk } from './test-utils'
 
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
+import type { StreamChunk } from '@khiwniti/common/types/contracts/llm'
 
 const mockAgentStream = (chunks: StreamChunk[]) => {
   mainPromptBaseParams.promptAiSdkStream = async function* ({}) {
@@ -101,22 +100,19 @@ describe('mainPrompt', () => {
         }) as Response,
     }
 
-    // Mock analytics and tracing
+    // Mock analytics
     spyOn(analytics, 'trackEvent').mockImplementation(() => {})
-    spyOn(bigquery, 'insertTrace').mockImplementation(() =>
-      Promise.resolve(true),
-    ) // Return Promise<boolean>
 
     // Mock processFileBlock
     spyOn(processFileBlockModule, 'processFileBlock').mockImplementation(
       async (params) => {
-        return {
+        return promptSuccess({
           tool: 'write_file' as const,
           path: params.path,
           content: params.newContent,
           patch: undefined,
           messages: [],
-        }
+        })
       },
     )
 
@@ -168,7 +164,7 @@ describe('mainPrompt', () => {
     mock.restore()
   })
 
-  class MockWebSocket {
+  class _MockWebSocket {
     send(msg: string) {}
     close() {}
     on(event: string, listener: (...args: any[]) => void) {}
@@ -198,6 +194,7 @@ describe('mainPrompt', () => {
       arch: 'test',
       homedir: '/home/test',
       cpus: 1,
+      chromeAvailable: false,
     },
   }
 
@@ -378,6 +375,7 @@ describe('mainPrompt', () => {
   it('should update consecutiveAssistantMessages when new prompt is received', async () => {
     const sessionState = getInitialSessionState(mockFileContext)
     sessionState.mainAgentState.stepsRemaining = 12
+    const initialStepsRemaining = sessionState.mainAgentState.stepsRemaining
 
     const action = {
       type: 'prompt' as const,
@@ -397,7 +395,7 @@ describe('mainPrompt', () => {
 
     // When there's a new prompt, consecutiveAssistantMessages should be set to 1
     expect(newSessionState.mainAgentState.stepsRemaining).toBe(
-      sessionState.mainAgentState.stepsRemaining - 1,
+      initialStepsRemaining - 1,
     )
   })
 

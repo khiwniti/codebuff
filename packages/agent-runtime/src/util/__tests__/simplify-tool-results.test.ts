@@ -5,7 +5,7 @@ import {
   simplifyTerminalCommandResults,
 } from '../simplify-tool-results'
 
-import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
+import type { CodebuffToolOutput } from '@khiwniti/common/tools/list'
 
 // Mock logger for tests
 const logger = {
@@ -286,7 +286,7 @@ describe('simplifyTerminalCommandResults', () => {
     const malformedInput = {
       invalidStructure: true,
       logger,
-    } as any
+    } as unknown as Parameters<typeof simplifyTerminalCommandResults>[0]
 
     const result = simplifyTerminalCommandResults(malformedInput)
 

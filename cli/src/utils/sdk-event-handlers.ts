@@ -3,6 +3,8 @@ import { match } from 'ts-pattern'
 import {
   appendTextToRootStream,
   appendToolToAgentBlock,
+  closeNativeReasoningBlock,
+  closeNativeReasoningInAgent,
   markAgentComplete,
 } from './block-operations'
 import { shouldHideAgent } from './constants'
@@ -30,17 +32,16 @@ import type { MessageUpdater } from './message-updater'
 import type { StreamController } from '../hooks/stream-state'
 import type { StreamStatus } from '../hooks/use-message-queue'
 import type { ContentBlock, ToolContentBlock } from '../types/chat'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 import type {
   PrintModeEvent as SDKEvent,
   PrintModeFinish,
   PrintModeSubagentFinish,
   PrintModeSubagentStart,
-  PrintModeText,
   PrintModeToolCall,
   PrintModeToolResult,
-} from '@codebuff/common/types/print-mode'
-import type { ToolName } from '@codebuff/sdk'
+} from '@khiwniti/common/types/print-mode'
+import type { ToolName } from '@khiwniti/sdk'
 import type { MutableRefObject } from 'react'
 
 export type SetStreamingAgentsFn = (
@@ -177,21 +178,12 @@ const handleSubagentStart = (
   )
 
   if (spawnAgentMatch) {
-    state.logger.info(
-      {
-        tempId: spawnAgentMatch.tempId,
-        realAgentId: event.agentId,
-        agentType: event.agentType,
-        hasParentAgentId: !!event.parentAgentId,
-      },
-      'Matching spawn_agents block found',
-    )
-
     state.message.updater.updateAiMessageBlocks((blocks) =>
       resolveSpawnAgentToReal({
         blocks,
         match: spawnAgentMatch,
         realAgentId: event.agentId,
+        realAgentType: event.agentType,
         parentAgentId: event.parentAgentId,
         params: event.params,
         prompt: event.prompt,
@@ -293,6 +285,7 @@ const handleSpawnAgentsToolCall = (
           agentId: `${event.toolCallId}-${originalIndex}`,
           agentType: agent.agent_type || '',
           prompt: agent.prompt,
+          params: agent.params,
           spawnToolCallId: event.toolCallId,
           spawnIndex: originalIndex,
           parentAgentType,
@@ -336,6 +329,19 @@ const handleRegularToolCall = (
 }
 
 const handleToolCall = (state: EventHandlerState, event: PrintModeToolCall) => {
+  // Close any open native reasoning blocks when a tool call happens
+  // (agent may go directly from thinking to tool calls without emitting text)
+  // This must happen BEFORE any early returns (spawn_agents, hidden tools)
+  if (event.parentAgentId && event.agentId) {
+    // For agent tool calls, close reasoning in that specific agent
+    state.message.updater.updateAiMessageBlocks((blocks) =>
+      closeNativeReasoningInAgent(blocks, event.agentId as string),
+    )
+  } else if (!event.parentAgentId) {
+    // For root tool calls, close reasoning at root level
+    state.message.updater.updateAiMessageBlocks(closeNativeReasoningBlock)
+  }
+
   if (event.toolName === 'spawn_agents' && event.input?.agents) {
     handleSpawnAgentsToolCall(state, event)
     return
@@ -352,43 +358,79 @@ const handleToolCall = (state: EventHandlerState, event: PrintModeToolCall) => {
 /**
  * Recursively finds and updates agent blocks that match a spawn_agents tool call.
  */
+const updateSpawnAgentBlock = (
+  block: ContentBlock,
+  toolCallId: string,
+  results: any[],
+): ContentBlock | null => {
+  if (block.type !== 'agent') {
+    return block
+  }
+
+  const spawnIndex = block.spawnIndex
+  const childBlocks = block.blocks
+  const isSpawnResultTarget =
+    block.spawnToolCallId === toolCallId &&
+    spawnIndex !== undefined &&
+    childBlocks
+
+  if (isSpawnResultTarget) {
+    const result = results[spawnIndex]
+    if (result?.value) {
+      const { content, hasError } = extractSpawnAgentResultContent(result.value)
+
+      if (hasError) {
+        if (childBlocks.length === 0) {
+          return null
+        }
+
+        return {
+          ...block,
+          blocks: content
+            ? [...childBlocks, { type: 'text', content } as ContentBlock]
+            : childBlocks,
+          status: 'complete' as const,
+        }
+      }
+
+      // Agents like thinker return all output at the end via lastMessage,
+      // while agents like basher may have already streamed their text.
+      const hasStreamedTextContent = childBlocks.some(
+        (b) => b.type === 'text' && b.textType === 'text',
+      )
+      const finalBlocks =
+        content && !hasStreamedTextContent
+          ? [...childBlocks, { type: 'text', content } as ContentBlock]
+          : childBlocks
+
+      if (finalBlocks.length > 0) {
+        return {
+          ...block,
+          blocks: finalBlocks,
+          status: 'complete' as const,
+        }
+      }
+    }
+  }
+
+  if (!childBlocks?.length) {
+    return block
+  }
+
+  return {
+    ...block,
+    blocks: updateSpawnAgentBlocks(childBlocks, toolCallId, results),
+  }
+}
+
 const updateSpawnAgentBlocks = (
   blocks: ContentBlock[],
   toolCallId: string,
   results: any[],
 ): ContentBlock[] => {
-  return blocks.map((block) => {
-    if (block.type !== 'agent') {
-      return block
-    }
-
-    if (block.spawnToolCallId === toolCallId && block.spawnIndex !== undefined && block.blocks) {
-      const result = results[block.spawnIndex]
-
-      if (result?.value) {
-        const { content, hasError } = extractSpawnAgentResultContent(result.value)
-        // Preserve streamed content (agents like commander stream their output)
-        const hasStreamedContent = block.blocks.length > 0
-        if (hasError || content || hasStreamedContent) {
-          return {
-            ...block,
-            blocks: hasStreamedContent ? block.blocks : [{ type: 'text', content } as ContentBlock],
-            status: hasError ? ('failed' as const) : ('complete' as const),
-          }
-        }
-      }
-    }
-
-    // Recursively process nested agent blocks
-    if (block.blocks?.length) {
-      const updatedNestedBlocks = updateSpawnAgentBlocks(block.blocks, toolCallId, results)
-      if (updatedNestedBlocks !== block.blocks) {
-        return { ...block, blocks: updatedNestedBlocks }
-      }
-    }
-
-    return block
-  })
+  return blocks
+    .map((block) => updateSpawnAgentBlock(block, toolCallId, results))
+    .filter((block): block is ContentBlock => block !== null)
 }
 
 const handleSpawnAgentsResult = (
@@ -420,7 +462,8 @@ const handleToolResult = (
   )
 
   const firstOutput = event.output?.[0]
-  const firstOutputValue = firstOutput && 'value' in firstOutput ? firstOutput.value : undefined
+  const firstOutputValue =
+    firstOutput && 'value' in firstOutput ? firstOutput.value : undefined
   const isSpawnAgentsResult =
     Array.isArray(firstOutputValue) &&
     firstOutputValue.some((v: any) => v?.agentName || v?.agentType)

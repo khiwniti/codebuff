@@ -4,13 +4,13 @@ import React, { memo, type ReactNode } from 'react'
 import { AgentBranchWrapper } from './agent-branch-wrapper'
 import { AgentListBranch } from './agent-list-branch'
 import { AskUserBranch } from './ask-user-branch'
+import { trimNewlines, isReasoningTextBlock } from './block-helpers'
 import { ContentWithMarkdown } from './content-with-markdown'
 import { ImageBlock } from './image-block'
 import { UserBlockTextWithInlineCopy } from './user-content-copy'
-import { trimTrailingNewlines, isReasoningTextBlock } from './block-helpers'
-import { PlanBox } from '../renderers/plan-box'
 import { useTheme } from '../../hooks/use-theme'
-import { extractTextBlockMargins, extractHtmlBlockMargins } from '../../utils/block-margins'
+import { PlanBox } from '../renderers/plan-box'
+
 import type {
   ContentBlock,
   TextContentBlock,
@@ -32,6 +32,7 @@ interface SingleBlockProps {
   onToggleCollapsed: (id: string) => void
   onBuildFast: () => void
   onBuildMax: () => void
+  onBuildLite: () => void
   isLastMessage?: boolean
   contentToCopy?: string
 }
@@ -51,6 +52,7 @@ export const SingleBlock = memo(
     onToggleCollapsed,
     onBuildFast,
     onBuildMax,
+    onBuildLite,
     isLastMessage,
     contentToCopy,
   }: SingleBlockProps): ReactNode => {
@@ -65,11 +67,12 @@ export const SingleBlock = memo(
         const textBlock = block as TextContentBlock
         const isStreamingText = isLoading || !isComplete
         const filteredContent = isStreamingText
-          ? trimTrailingNewlines(textBlock.content)
+          ? trimNewlines(textBlock.content)
           : textBlock.content.trim()
+        if (!filteredContent) {
+          return null
+        }
         const renderKey = `${messageId}-text-${idx}`
-        const prevBlock = idx > 0 && blocks ? blocks[idx - 1] : null
-        const { marginTop, marginBottom } = extractTextBlockMargins(textBlock, prevBlock)
         const explicitColor = textBlock.color
         const blockTextColor = explicitColor ?? textColor
 
@@ -83,8 +86,8 @@ export const SingleBlock = memo(
               textColor={blockTextColor}
               codeBlockWidth={codeBlockWidth}
               palette={markdownPalette}
-              marginTop={marginTop}
-              marginBottom={marginBottom}
+              marginTop={0}
+              marginBottom={0}
             />
           )
         }
@@ -95,8 +98,6 @@ export const SingleBlock = memo(
             style={{
               wrapMode: 'word',
               fg: blockTextColor,
-              marginTop,
-              marginBottom,
             }}
             attributes={isUser ? TextAttributes.ITALIC : undefined}
           >
@@ -119,21 +120,19 @@ export const SingleBlock = memo(
               markdownPalette={markdownPalette}
               onBuildFast={onBuildFast}
               onBuildMax={onBuildMax}
+              onBuildLite={onBuildLite}
             />
           </box>
         )
       }
 
       case 'html': {
-        const { marginTop, marginBottom } = extractHtmlBlockMargins(block)
         return (
           <box
             key={`${messageId}-html-${idx}`}
             style={{
               flexDirection: 'column',
               gap: 0,
-              marginTop,
-              marginBottom,
               width: '100%',
             }}
           >
@@ -177,6 +176,7 @@ export const SingleBlock = memo(
             onToggleCollapsed={onToggleCollapsed}
             onBuildFast={onBuildFast}
             onBuildMax={onBuildMax}
+            onBuildLite={onBuildLite}
             siblingBlocks={blocks}
             isLastMessage={isLastMessage}
           />

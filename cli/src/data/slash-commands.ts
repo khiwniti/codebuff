@@ -1,4 +1,8 @@
-import { AGENT_MODES } from '../utils/constants'
+import { CHATGPT_OAUTH_ENABLED } from '@khiwniti/common/constants/chatgpt-oauth'
+import { AGENT_MODES, IS_FREEBUFF } from '../utils/constants'
+
+import type { SkillsMap } from '@khiwniti/common/types/skill'
+
 
 export interface SlashCommand {
   id: string
@@ -10,16 +14,41 @@ export interface SlashCommand {
    * input matches the command id exactly (no arguments).
    */
   implicitCommand?: boolean
+  /**
+   * If set, selecting this command inserts this text into the input field
+   * instead of executing a command. Useful for agent shortcuts.
+   */
+  insertText?: string
 }
 
-// Generate mode commands from the AGENT_MODES constant
-const MODE_COMMANDS: SlashCommand[] = AGENT_MODES.map((mode) => ({
-  id: `mode:${mode.toLowerCase()}`,
-  label: `mode:${mode.toLowerCase()}`,
-  description: `Switch to ${mode} mode`,
-}))
+// Generate mode commands from the AGENT_MODES constant (excluded in Freebuff)
+const MODE_COMMANDS: SlashCommand[] = IS_FREEBUFF
+  ? []
+  : AGENT_MODES.map((mode) => ({
+      id: `mode:${mode.toLowerCase()}`,
+      label: `mode:${mode.toLowerCase()}`,
+      description: `Switch to ${mode} mode`,
+      aliases: [`model:${mode.toLowerCase()}`],
+    }))
 
-export const SLASH_COMMANDS: SlashCommand[] = [
+const FREEBUFF_REMOVED_COMMAND_IDS = new Set([
+  'ads:enable',
+  'ads:disable',
+  'usage',
+  'subscribe',
+  'agent:gpt-5',
+  'image',
+  'publish',
+  'init',
+])
+
+const FREEBUFF_ONLY_COMMAND_IDS = new Set([
+  'connect',
+  'plan',
+  'end-session',
+])
+
+const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'help',
     label: 'help',
@@ -27,21 +56,26 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     aliases: ['h', '?'],
     implicitCommand: true,
   },
-  {
-    id: 'connect:claude',
-    label: 'connect:claude',
-    description: 'Connect your Claude Pro/Max subscription',
-    aliases: ['claude'],
-  },
+  ...(CHATGPT_OAUTH_ENABLED
+    ? [
+        {
+          id: 'connect',
+          label: 'connect',
+          description: 'Connect your ChatGPT account',
+          aliases: ['connect:chatgpt', 'chatgpt'],
+        },
+      ]
+    : []),
+
   {
     id: 'ads:enable',
     label: 'ads:enable',
-    description: 'Enable contextual ads and earn credits',
+    description: 'Enable contextual ads',
   },
   {
     id: 'ads:disable',
     label: 'ads:disable',
-    description: 'Disable contextual ads and stop earning credits',
+    description: 'Disable contextual ads',
   },
   {
     id: 'init',
@@ -66,14 +100,30 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     aliases: ['credits'],
   },
   {
-    id: 'buy-credits',
-    label: 'buy-credits',
-    description: 'Open the usage page to buy credits',
+    id: 'subscribe',
+    label: 'subscribe',
+    description: 'Subscribe to get more usage',
+    aliases: ['strong', 'sub', 'buy-credits'],
+  },
+  {
+    id: 'interview',
+    label: 'interview',
+    description: 'AI asks a series of questions to flesh out request into a spec',
+  },
+  {
+    id: 'plan',
+    label: 'plan',
+    description: 'Create a plan for how to implement a request',
+  },
+  {
+    id: 'review',
+    label: 'review',
+    description: 'Review code changes',
   },
   {
     id: 'new',
     label: 'new',
-    description: 'Start a fresh conversation session',
+    description: 'Clear the conversation history and start a new chat',
     aliases: ['n', 'clear', 'c', 'reset'],
     implicitCommand: true,
   },
@@ -84,9 +134,21 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     aliases: ['chats'],
   },
   {
+    id: 'agent:gpt-5',
+    label: 'agent:gpt-5',
+    description: 'Spawn the GPT-5 agent to help solve complex problems',
+    insertText: '@GPT-5 Agent ',
+  },
+  // {
+  //   id: 'agent:opus',
+  //   label: 'agent:opus',
+  //   description: 'Spawn the Opus agent to help solve any problem',
+  //   insertText: '@Opus Agent ',
+  // },
+  {
     id: 'feedback',
     label: 'feedback',
-    description: 'Share general feedback about Codebuff',
+    description: IS_FREEBUFF ? 'Share general feedback about Freebuff' : 'Share general feedback about Codebuff',
   },
   {
     id: 'bash',
@@ -101,16 +163,21 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     aliases: ['img', 'attach'],
   },
   ...MODE_COMMANDS,
+  // {
+  //   id: 'publish',
+  //   label: 'publish',
+  //   description: 'Publish agents to the agent store',
+  // },
   {
-    id: 'referral',
-    label: 'referral',
-    description: 'Redeem a referral code for bonus credits',
-    aliases: ['redeem'],
+    id: 'theme:toggle',
+    label: 'theme:toggle',
+    description: 'Toggle between light and dark mode',
   },
   {
-    id: 'publish',
-    label: 'publish',
-    description: 'Publish agents to the agent store',
+    id: 'end-session',
+    label: 'end-session',
+    description: 'End your free session (lets you switch model)',
+    aliases: ['model'],
   },
   {
     id: 'logout',
@@ -128,8 +195,42 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
 ]
 
+export const SLASH_COMMANDS = IS_FREEBUFF
+  ? ALL_SLASH_COMMANDS.filter(
+      (cmd) => !FREEBUFF_REMOVED_COMMAND_IDS.has(cmd.id),
+    )
+  : ALL_SLASH_COMMANDS.filter(
+      (cmd) => !FREEBUFF_ONLY_COMMAND_IDS.has(cmd.id),
+    )
+
 export const SLASHLESS_COMMAND_IDS = new Set(
   SLASH_COMMANDS.filter((cmd) => cmd.implicitCommand).map((cmd) =>
     cmd.id.toLowerCase(),
   ),
 )
+
+/** Maximum description length for skill commands in the slash menu */
+const SKILL_MENU_DESCRIPTION_MAX_LENGTH = 50
+
+function truncateDescription(description: string): string {
+  if (description.length <= SKILL_MENU_DESCRIPTION_MAX_LENGTH) {
+    return description
+  }
+  return description.slice(0, SKILL_MENU_DESCRIPTION_MAX_LENGTH - 1) + '…'
+}
+
+/**
+ * Returns SLASH_COMMANDS merged with skill commands.
+ * Skills become slash commands that users can invoke directly.
+ */
+export function getSlashCommandsWithSkills(skills: SkillsMap): SlashCommand[] {
+  const skillCommands: SlashCommand[] = Object.values(skills).map((skill) => ({
+    id: `skill:${skill.name}`,
+    label: `skill:${skill.name}`,
+    description: truncateDescription(skill.description),
+  }))
+
+  const commands = [...SLASH_COMMANDS, ...skillCommands]
+
+  return commands
+}

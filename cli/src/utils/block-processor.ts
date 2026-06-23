@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react'
 
+import { shouldCollapseByDefault } from './constants'
 import {
   isImplementorAgent,
   groupConsecutiveImplementors,
@@ -7,6 +7,7 @@ import {
   groupConsecutiveToolBlocks,
 } from './implementor-helpers'
 import { isImageBlock } from '../types/chat'
+
 import type {
   ContentBlock,
   AgentContentBlock,
@@ -14,6 +15,7 @@ import type {
   TextContentBlock,
   ImageContentBlock,
 } from '../types/chat'
+import type { ReactNode } from 'react'
 
 /**
  * Type guard for reasoning text blocks (thinking blocks)
@@ -61,6 +63,47 @@ export interface BlockProcessorHandlers {
 
   /** Handle a single block that doesn't fit into any group category */
   onSingleBlock: (block: ContentBlock, index: number) => ReactNode
+}
+
+/**
+ * Split an array of items into sub-groups based on agent size.
+ * Consecutive "small" agents (collapsed by default) are grouped together
+ * so they can share a grid row. Each "large" agent gets its own sub-group
+ * so it renders at full width.
+ */
+export function splitByAgentSize<T>(
+  items: T[],
+  getAgentType: (item: T) => string,
+): T[][] {
+  if (items.length <= 1) return [items]
+
+  const subGroups: T[][] = []
+  let currentSmallGroup: T[] = []
+
+  for (const item of items) {
+    if (shouldCollapseByDefault(getAgentType(item))) {
+      currentSmallGroup.push(item)
+    } else {
+      if (currentSmallGroup.length > 0) {
+        subGroups.push(currentSmallGroup)
+        currentSmallGroup = []
+      }
+      subGroups.push([item])
+    }
+  }
+
+  if (currentSmallGroup.length > 0) {
+    subGroups.push(currentSmallGroup)
+  }
+
+  return subGroups
+}
+
+/** Convenience wrapper for splitting AgentContentBlock arrays by size. */
+export function splitAgentsBySize(
+  agents: AgentContentBlock[],
+): AgentContentBlock[][] {
+  return splitByAgentSize(agents, (a) => a.agentType)
 }
 
 /**

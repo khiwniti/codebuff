@@ -1,10 +1,11 @@
-import { API_KEY_ENV_VAR } from '@codebuff/common/old-constants'
+import { API_KEY_ENV_VAR } from '@khiwniti/common/old-constants'
+import { CodebuffClient } from '@khiwniti/sdk'
 import { describe, expect, it } from 'bun:test'
 
-import { CodebuffClient } from '@codebuff/sdk'
-import filePickerDefinition from '../file-explorer/file-picker'
 import fileListerDefinition from '../file-explorer/file-lister'
-import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import filePickerDefinition from '../file-explorer/file-picker'
+
+import type { PrintModeEvent } from '@khiwniti/common/types/print-mode'
 
 /**
  * Integration tests for agents that use the read_subtree tool.
@@ -283,8 +284,8 @@ export class AuthService {
       }
 
       // Use local agent definitions to test the updated handleSteps
-      const localFilePickerDef = filePickerDefinition as unknown as any
-      const localFileListerDef = fileListerDefinition as unknown as any
+      const localFilePickerDef = filePickerDefinition
+      const localFileListerDef = fileListerDefinition
 
       const client = new CodebuffClient({
         apiKey,

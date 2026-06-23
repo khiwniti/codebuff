@@ -1,11 +1,12 @@
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { promptSuccess } from '@khiwniti/common/util/error'
 import { beforeEach, describe, expect, it } from 'bun:test'
 
 import { processStreamWithTools } from '../tool-stream-parser'
 import { createToolCallChunk } from './test-utils'
 
-import type { AgentRuntimeDeps } from '@codebuff/common/types/contracts/agent-runtime'
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
+import type { AgentRuntimeDeps } from '@khiwniti/common/types/contracts/agent-runtime'
+import type { StreamChunk } from '@khiwniti/common/types/contracts/llm'
 
 describe('processStreamWithTags', () => {
   async function* createMockStream(chunks: StreamChunk[]) {
@@ -13,7 +14,7 @@ describe('processStreamWithTags', () => {
       yield chunk
     }
 
-    return 'mock-message-id'
+    return promptSuccess('mock-message-id')
   }
 
   function textChunk(text: string): StreamChunk {
@@ -46,10 +47,6 @@ describe('processStreamWithTags', () => {
       },
     }
 
-    function onError(name: string, error: string) {
-      events.push({ name, error })
-    }
-
     const result: string[] = []
     const responseChunks: any[] = []
 
@@ -69,7 +66,6 @@ describe('processStreamWithTags', () => {
       stream,
       processors,
       defaultProcessor,
-      onError,
       onResponseChunk,
       executeXmlToolCall: async () => {},
     })) {
@@ -113,10 +109,6 @@ describe('processStreamWithTags', () => {
       },
     }
 
-    function onError(name: string, error: string) {
-      events.push({ name, error })
-    }
-
     const result: string[] = []
     const responseChunks: any[] = []
 
@@ -136,7 +128,6 @@ describe('processStreamWithTags', () => {
       stream,
       processors,
       defaultProcessor,
-      onError,
       onResponseChunk,
       executeXmlToolCall: async () => {},
     })) {
@@ -190,10 +181,6 @@ describe('processStreamWithTags', () => {
       },
     }
 
-    function onError(name: string, error: string) {
-      events.push({ name, error })
-    }
-
     const result: string[] = []
     const responseChunks: any[] = []
 
@@ -213,7 +200,6 @@ describe('processStreamWithTags', () => {
       stream,
       processors,
       defaultProcessor,
-      onError,
       onResponseChunk,
       executeXmlToolCall: async () => {},
     })) {
@@ -266,10 +252,6 @@ describe('processStreamWithTags', () => {
       },
     }
 
-    function onError(name: string, error: string) {
-      events.push({ name, error, type: 'error' })
-    }
-
     const responseChunks: any[] = []
 
     function onResponseChunk(chunk: any) {
@@ -289,12 +271,11 @@ describe('processStreamWithTags', () => {
       }
     }
 
-    for await (const chunk of processStreamWithTools({
+    for await (const _chunk of processStreamWithTools({
       ...agentRuntimeImpl,
       stream,
       processors,
       defaultProcessor,
-      onError,
       onResponseChunk,
       executeXmlToolCall: async () => {},
     })) {
@@ -340,10 +321,6 @@ describe('processStreamWithTags', () => {
       },
     }
 
-    function onError(name: string, error: string) {
-      events.push({ name, error, type: 'error' })
-    }
-
     const result: string[] = []
     const responseChunks: any[] = []
 
@@ -363,7 +340,6 @@ describe('processStreamWithTags', () => {
       stream,
       processors,
       defaultProcessor,
-      onError,
       onResponseChunk,
       executeXmlToolCall: async () => {},
     })) {
@@ -413,10 +389,6 @@ describe('processStreamWithTags', () => {
       },
     }
 
-    function onError(name: string, error: string) {
-      events.push({ name, error, type: 'error' })
-    }
-
     const result: string[] = []
     const responseChunks: any[] = []
 
@@ -436,7 +408,6 @@ describe('processStreamWithTags', () => {
       stream,
       processors,
       defaultProcessor,
-      onError,
       onResponseChunk,
       executeXmlToolCall: async () => {},
     })) {
@@ -467,10 +438,6 @@ describe('processStreamWithTags', () => {
 
     const processors = {}
 
-    function onError(name: string, error: string) {
-      events.push({ name, error, type: 'error' })
-    }
-
     const result: string[] = []
     const responseChunks: any[] = []
 
@@ -490,7 +457,6 @@ describe('processStreamWithTags', () => {
       stream,
       processors,
       defaultProcessor,
-      onError,
       onResponseChunk,
       executeXmlToolCall: async () => {},
     })) {
@@ -514,10 +480,6 @@ describe('processStreamWithTags', () => {
 
     const processors = {}
 
-    function onError(name: string, error: string) {
-      events.push({ name, error, type: 'error' })
-    }
-
     const result: string[] = []
     const responseChunks: any[] = []
 
@@ -537,7 +499,6 @@ describe('processStreamWithTags', () => {
       stream,
       processors,
       defaultProcessor,
-      onError,
       onResponseChunk,
       executeXmlToolCall: async () => {},
     })) {

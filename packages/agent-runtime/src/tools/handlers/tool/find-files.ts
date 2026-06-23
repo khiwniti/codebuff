@@ -1,4 +1,4 @@
-import { jsonToolResult } from '@codebuff/common/util/messages'
+import { jsonToolResult } from '@khiwniti/common/util/messages'
 
 import {
   requestRelevantFiles,
@@ -13,15 +13,15 @@ import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { RequestFilesFn } from '@codebuff/common/types/contracts/client'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+} from '@khiwniti/common/tools/list'
+import type { RequestFilesFn } from '@khiwniti/common/types/contracts/client'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 import type {
   ParamsExcluding,
   ParamsOf,
-} from '@codebuff/common/types/function-params'
-import type { AgentState } from '@codebuff/common/types/session-state'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
+} from '@khiwniti/common/types/function-params'
+import type { AgentState } from '@khiwniti/common/types/session-state'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
 
 // Turn this on to collect full file context, using Claude-4-Opus to pick which files to send up
 // TODO: We might want to be able to turn this on on a per-repo basis.

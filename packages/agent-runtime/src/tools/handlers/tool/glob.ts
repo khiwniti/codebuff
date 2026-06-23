@@ -3,7 +3,7 @@ import type {
   ClientToolCall,
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
+} from '@khiwniti/common/tools/list'
 
 type ToolName = 'glob'
 export const handleGlob = (async (params: {

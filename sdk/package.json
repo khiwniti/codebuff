@@ -1,8 +1,7 @@
 {
-  "name": "@codebuff/sdk",
-  "private": false,
-  "version": "0.10.2",
-  "description": "Official SDK for Codebuff — AI coding agent & framework",
+  "name": "@khiwniti/sdk",
+  "version": "1.0.1",
+  "description": "Openbuff SDK - AI coding agent framework",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -41,10 +40,10 @@
     "node": ">=18.0.0"
   },
   "keywords": [
-    "codebuff",
+    "openbuff",
     "ai",
-    "code-editing",
-    "assistant",
+    "coding",
+    "agent",
     "sdk",
     "typescript"
   ],
@@ -53,7 +52,7 @@
     "url": "git+https://github.com/CodebuffAI/codebuff.git",
     "directory": "sdk"
   },
-  "homepage": "https://codebuff.com",
+  "homepage": "https://openbuff.dev",
   "bugs": {
     "url": "https://github.com/CodebuffAI/codebuff/issues"
   },
@@ -63,9 +62,11 @@
     "@vscode/tree-sitter-wasm": "0.1.4",
     "ai": "^5.0.52",
     "diff": "8.0.3",
+    "gray-matter": "^4.0.3",
     "ignore": "7.0.5",
+    "ipaddr.js": "^1.9.1",
     "micromatch": "^4.0.8",
-    "web-tree-sitter": "0.25.6",
+    "web-tree-sitter": "0.25.10",
     "ws": "^8.18.0",
     "zod": "^4.2.1"
   },

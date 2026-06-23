@@ -1,44 +1,44 @@
 import * as os from 'os'
 import path from 'path'
 
-import { getFileTokenScores } from '@codebuff/code-map/parse'
+import { getSystemInfo } from '@khiwniti/common/util/system-info'
 import {
-  KNOWLEDGE_FILE_NAMES,
   KNOWLEDGE_FILE_NAMES_LOWERCASE,
   isKnowledgeFile,
-} from '@codebuff/common/constants/knowledge'
+} from '@khiwniti/common/constants/knowledge'
 import {
   getProjectFileTree,
   getAllFilePaths,
-} from '@codebuff/common/project-file-tree'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { getErrorObject } from '@codebuff/common/util/error'
+} from '@khiwniti/common/project-file-tree'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
+import { getErrorObject } from '@khiwniti/common/util/error'
 import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
 
 import { loadLocalAgents } from './agents/load-agents'
+import { loadSkills } from './skills/load-skills'
 
 // Re-export for SDK consumers
 export {
   KNOWLEDGE_FILE_NAMES,
   PRIMARY_KNOWLEDGE_FILE_NAME,
   isKnowledgeFile,
-} from '@codebuff/common/constants/knowledge'
+} from '@khiwniti/common/constants/knowledge'
 
 import type { CustomToolDefinition } from './custom-tool'
-import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
-import type { Message } from '@codebuff/common/types/messages/codebuff-message'
+import type { AgentDefinition } from '@khiwniti/common/templates/initial-agents-dir/types/agent-definition'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { CodebuffFileSystem } from '@khiwniti/common/types/filesystem'
+import type { Message } from '@khiwniti/common/types/messages/codebuff-message'
 import type {
   AgentOutput,
   SessionState,
-} from '@codebuff/common/types/session-state'
-import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+} from '@khiwniti/common/types/session-state'
+import type { CodebuffSpawn } from '@khiwniti/common/types/spawn'
 import type {
   CustomToolDefinitions,
   FileTreeNode,
-} from '@codebuff/common/util/file'
+} from '@khiwniti/common/util/file'
 import type * as fsType from 'fs'
 
 /**
@@ -52,9 +52,7 @@ export function selectHighestPriorityKnowledgeFile(
 ): string | undefined {
   // Loop through priorities and find the first match directly
   for (const priorityName of KNOWLEDGE_FILE_NAMES_LOWERCASE) {
-    const match = candidates.find((f) =>
-      f.toLowerCase().endsWith(priorityName),
-    )
+    const match = candidates.find((f) => f.toLowerCase().endsWith(priorityName))
     if (match) return match
   }
   return undefined
@@ -63,10 +61,13 @@ export function selectHighestPriorityKnowledgeFile(
 export type RunState = {
   sessionState?: SessionState
   output: AgentOutput
+  traceSessionId: string
 }
 
 export type InitialSessionStateOptions = {
   cwd?: string
+  /** Optional directory path to load skills from. When provided, skills are loaded from this directory instead of the default locations. */
+  skillsDir?: string
   projectFiles?: Record<string, string>
   knowledgeFiles?: Record<string, string>
   /** User-provided knowledge files that will be merged with home directory files */
@@ -133,26 +134,28 @@ function processCustomToolDefinitions(
 /**
  * Computes project file indexes (file tree and token scores)
  */
-async function computeProjectIndex(
-  cwd: string,
-  projectFiles: Record<string, string>,
-): Promise<{
+type ProjectIndexInput = {
+  cwd: string
+  fileTree: FileTreeNode[]
+  filePaths: string[]
+  readFile?: (filePath: string) => string | null | Promise<string | null>
+}
+
+const MAX_DISCOVERED_PROJECT_READ_BYTES = 1_000_000
+
+async function computeProjectIndex(params: ProjectIndexInput): Promise<{
   fileTree: FileTreeNode[]
   fileTokenScores: Record<string, any>
   tokenCallers: Record<string, any>
 }> {
-  const filePaths = Object.keys(projectFiles).sort()
-  const fileTree = buildFileTree(filePaths)
+  const { cwd, fileTree, filePaths, readFile } = params
   let fileTokenScores = {}
   let tokenCallers = {}
 
   if (filePaths.length > 0) {
     try {
-      const tokenData = await getFileTokenScores(
-        cwd,
-        filePaths,
-        (filePath: string) => projectFiles[filePath] || null,
-      )
+      const { getFileTokenScores } = await import('@khiwniti/code-map/parse')
+      const tokenData = await getFileTokenScores(cwd, filePaths, readFile)
       fileTokenScores = tokenData.tokenScores
       tokenCallers = tokenData.tokenCallers
     } catch (error) {
@@ -162,6 +165,68 @@ async function computeProjectIndex(
   }
 
   return { fileTree, fileTokenScores, tokenCallers }
+}
+
+function getProjectIndexInput(params: {
+  cwd: string
+  fs?: CodebuffFileSystem
+  logger?: Logger
+  projectFiles?: Record<string, string>
+  discoveredProject?: { fileTree: FileTreeNode[]; filePaths: string[] }
+}): ProjectIndexInput | undefined {
+  const { cwd, fs, logger, projectFiles, discoveredProject } = params
+
+  if (projectFiles) {
+    const filePaths = Object.keys(projectFiles).sort()
+    return {
+      cwd,
+      fileTree: buildFileTree(filePaths),
+      filePaths,
+      readFile: (filePath: string) => projectFiles[filePath] || null,
+    }
+  }
+
+  if (discoveredProject) {
+    if (!fs || !logger) return undefined
+
+    return {
+      cwd,
+      fileTree: discoveredProject.fileTree,
+      filePaths: discoveredProject.filePaths.sort(),
+      readFile: createDiscoveredProjectReader({ cwd, fs, logger }),
+    }
+  }
+
+  return undefined
+}
+
+function createDiscoveredProjectReader(params: {
+  cwd: string
+  fs: CodebuffFileSystem
+  logger: Logger
+}): (filePath: string) => Promise<string | null> {
+  const { cwd, fs, logger } = params
+
+  return async (filePath: string) => {
+    const fullPath = path.join(cwd, filePath)
+    try {
+      const stats = await fs.stat(fullPath)
+      if (getFileSize(stats) > MAX_DISCOVERED_PROJECT_READ_BYTES) {
+        return null
+      }
+      return await fs.readFile(fullPath, 'utf8')
+    } catch (error) {
+      logger.debug?.(
+        { filePath, error: getErrorObject(error) },
+        'Failed to read discovered project file for symbol scoring',
+      )
+      return null
+    }
+  }
+}
+
+function getFileSize(stats: Awaited<ReturnType<CodebuffFileSystem['stat']>>) {
+  return typeof stats.size === 'number' ? stats.size : 0
 }
 
 /**
@@ -258,43 +323,20 @@ async function getGitChanges(params: {
 }
 
 /**
- * Discovers project files using .gitignore patterns when projectFiles is undefined
+ * Discovers project paths using .gitignore patterns when projectFiles is undefined.
+ * This intentionally does not read every file into memory; large repositories can
+ * contain generated or binary files that are expensive to retain before parsing.
  */
-async function discoverProjectFiles(params: {
+async function discoverProjectPaths(params: {
   cwd: string
   fs: CodebuffFileSystem
-  logger: Logger
-}): Promise<Record<string, string>> {
-  const { cwd, fs, logger } = params
+}): Promise<{ fileTree: FileTreeNode[]; filePaths: string[] }> {
+  const { cwd, fs } = params
 
   const fileTree = await getProjectFileTree({ projectRoot: cwd, fs })
   const filePaths = getAllFilePaths(fileTree)
-  let error
 
-  // Create projectFiles with empty content - the token scorer will read from disk
-  const projectFilePromises = Object.fromEntries(
-    filePaths.map((filePath) => [
-      filePath,
-      fs.readFile(path.join(cwd, filePath), 'utf8').catch((err) => {
-        error = err
-        return '[ERROR_READING_FILE]'
-      }),
-    ]),
-  )
-  if (error) {
-    logger.warn(
-      { error: getErrorObject(error) },
-      'Failed to discover some project files',
-    )
-  }
-
-  const projectFilesResolved: Record<string, string> = {}
-  for (const [filePath, contentPromise] of Object.entries(
-    projectFilePromises,
-  )) {
-    projectFilesResolved[filePath] = await contentPromise
-  }
-  return projectFilesResolved
+  return { fileTree, filePaths }
 }
 
 /**
@@ -318,8 +360,11 @@ export async function loadUserKnowledgeFiles(params: {
   let entries: string[]
   try {
     entries = await fs.readdir(homeDir)
-  } catch {
-    logger.debug?.({ homeDir }, 'Failed to read home directory')
+  } catch (error) {
+    logger.debug?.(
+      { homeDir, error: getErrorObject(error) },
+      'Failed to read home directory',
+    )
     return userKnowledgeFiles
   }
 
@@ -347,8 +392,11 @@ export async function loadUserKnowledgeFiles(params: {
         userKnowledgeFiles[tildeKey] = content
         // Only use the first file found (highest priority)
         break
-      } catch {
-        logger.debug?.({ filePath }, 'Failed to read user knowledge file')
+      } catch (error) {
+        logger.debug?.(
+          { filePath, error: getErrorObject(error) },
+          'Failed to read user knowledge file',
+        )
       }
     }
   }
@@ -404,10 +452,36 @@ function deriveKnowledgeFiles(
   return knowledgeFiles
 }
 
+async function loadKnowledgeFilesFromPaths(params: {
+  cwd: string
+  filePaths: string[]
+  fs: CodebuffFileSystem
+  logger: Logger
+}): Promise<Record<string, string>> {
+  const { cwd, filePaths, fs, logger } = params
+  const selectedFilePaths = selectKnowledgeFilePaths(filePaths)
+
+  const knowledgeFiles: Record<string, string> = {}
+  for (const filePath of selectedFilePaths) {
+    try {
+      knowledgeFiles[filePath] = await fs.readFile(
+        path.join(cwd, filePath),
+        'utf8',
+      )
+    } catch (error) {
+      logger.debug?.(
+        { filePath, error: getErrorObject(error) },
+        'Failed to read project knowledge file',
+      )
+    }
+  }
+  return knowledgeFiles
+}
+
 export async function initialSessionState(
   params: InitialSessionStateOptions,
 ): Promise<SessionState> {
-  const { cwd, maxAgentSteps } = params
+  const { cwd, maxAgentSteps, skillsDir } = params
   let {
     agentDefinitions,
     customToolDefinitions,
@@ -440,12 +514,27 @@ export async function initialSessionState(
     }
   }
 
+  let discoveredProject:
+    | { fileTree: FileTreeNode[]; filePaths: string[] }
+    | undefined
+
   // Auto-discover project files if not provided and cwd is available
   if (projectFiles === undefined && cwd) {
-    projectFiles = await discoverProjectFiles({ cwd, fs, logger })
+    discoveredProject = await discoverProjectPaths({ cwd, fs })
   }
   if (knowledgeFiles === undefined) {
-    knowledgeFiles = projectFiles ? deriveKnowledgeFiles(projectFiles) : {}
+    if (projectFiles) {
+      knowledgeFiles = deriveKnowledgeFiles(projectFiles)
+    } else if (cwd && discoveredProject) {
+      knowledgeFiles = await loadKnowledgeFilesFromPaths({
+        cwd,
+        filePaths: discoveredProject.filePaths,
+        fs,
+        logger,
+      })
+    } else {
+      knowledgeFiles = {}
+    }
   }
 
   let processedAgentTemplates: Record<string, any> = {}
@@ -458,13 +547,15 @@ export async function initialSessionState(
     customToolDefinitions,
   )
 
-  // Generate file tree and token scores from projectFiles if available
   let fileTree: FileTreeNode[] = []
   let fileTokenScores: Record<string, any> = {}
   let tokenCallers: Record<string, any> = {}
 
-  if (cwd && projectFiles) {
-    const result = await computeProjectIndex(cwd, projectFiles)
+  const projectIndex = cwd
+    ? getProjectIndexInput({ cwd, fs, logger, projectFiles, discoveredProject })
+    : undefined
+  if (projectIndex) {
+    const result = await computeProjectIndex(projectIndex)
     fileTree = result.fileTree
     fileTokenScores = result.fileTokenScores
     tokenCallers = result.tokenCallers
@@ -487,6 +578,13 @@ export async function initialSessionState(
     ...providedUserKnowledgeFiles,
   }
 
+  // Load skills from project and home directories
+  const skills = await loadSkills({
+    cwd: cwd ?? process.cwd(),
+    skillsPath: skillsDir,
+    verbose: false,
+  })
+
   const initialState = getInitialSessionState({
     projectRoot: cwd ?? process.cwd(),
     cwd: cwd ?? process.cwd(),
@@ -497,17 +595,11 @@ export async function initialSessionState(
     userKnowledgeFiles,
     agentTemplates: processedAgentTemplates,
     customToolDefinitions: processedCustomToolDefinitions,
+    skills,
     gitChanges,
     changesSinceLastChat: {},
     shellConfigFiles: {},
-    systemInfo: {
-      platform: process.platform,
-      shell: 'bash',
-      nodeVersion: process.version,
-      arch: process.arch,
-      homedir: os.homedir(),
-      cpus: os.cpus().length ?? 1,
-    },
+    systemInfo: getSystemInfo(),
   })
 
   if (maxAgentSteps) {
@@ -519,6 +611,7 @@ export async function initialSessionState(
 
 export async function generateInitialRunState({
   cwd,
+  skillsDir,
   projectFiles,
   knowledgeFiles,
   userKnowledgeFiles,
@@ -528,6 +621,7 @@ export async function generateInitialRunState({
   fs,
 }: {
   cwd: string
+  skillsDir?: string
   projectFiles?: Record<string, string>
   knowledgeFiles?: Record<string, string>
   userKnowledgeFiles?: Record<string, string>
@@ -537,8 +631,10 @@ export async function generateInitialRunState({
   fs: CodebuffFileSystem
 }): Promise<RunState> {
   return {
+    traceSessionId: crypto.randomUUID(),
     sessionState: await initialSessionState({
       cwd,
+      skillsDir,
       projectFiles,
       knowledgeFiles,
       userKnowledgeFiles,
@@ -615,11 +711,17 @@ export async function applyOverridesToSessionState(
   // Apply projectFiles override (recomputes file tree and token scores)
   if (overrides.projectFiles !== undefined) {
     if (cwd) {
-      const { fileTree, fileTokenScores, tokenCallers } =
-        await computeProjectIndex(cwd, overrides.projectFiles)
-      sessionState.fileContext.fileTree = fileTree
-      sessionState.fileContext.fileTokenScores = fileTokenScores
-      sessionState.fileContext.tokenCallers = tokenCallers
+      const projectIndex = getProjectIndexInput({
+        cwd,
+        projectFiles: overrides.projectFiles,
+      })
+      if (projectIndex) {
+        const { fileTree, fileTokenScores, tokenCallers } =
+          await computeProjectIndex(projectIndex)
+        sessionState.fileContext.fileTree = fileTree
+        sessionState.fileContext.fileTokenScores = fileTokenScores
+        sessionState.fileContext.tokenCallers = tokenCallers
+      }
     } else {
       // If projectFiles are provided but no cwd, reset file context fields
       sessionState.fileContext.fileTree = []

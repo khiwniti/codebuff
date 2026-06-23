@@ -1,5 +1,7 @@
-import type { InputMode } from './input-modes'
+import { getInputModeConfig, type InputMode } from './input-modes'
+import { isPlainEnterKey } from './terminal-enter-detection'
 import type { KeyEvent } from '@opentui/core'
+
 
 /**
  * State needed to determine keyboard actions in chat input contexts.
@@ -82,6 +84,9 @@ export type ChatKeyboardAction =
   | { type: 'toggle-agent-mode' }
   | { type: 'unfocus-agent' }
 
+  // Toggle all collapsed/expanded
+  | { type: 'toggle-all' }
+
   // Queue actions
   | { type: 'clear-queue' }
 
@@ -126,10 +131,7 @@ export function resolveChatKeyboardAction(
   const isTab = key.name === 'tab' && !hasModifier(key)
   const isShiftTab =
     key.name === 'tab' && key.shift && !key.ctrl && !key.meta && !key.option
-  const isEnter =
-    (key.name === 'return' || key.name === 'enter') &&
-    !key.shift &&
-    !hasModifier(key)
+  const isEnter = isPlainEnterKey(key)
   const isPageUp = key.name === 'pageup' && !hasModifier(key)
   const isPageDown = key.name === 'pagedown' && !hasModifier(key)
 
@@ -146,7 +148,7 @@ export function resolveChatKeyboardAction(
     return { type: 'none' }
   }
 
-  // Priority 1: Feedback mode handlers
+  // Priority 1: Feedback mode - block global keys except Escape/Ctrl-C/Ctrl-V
   if (state.feedbackMode) {
     if (isEscape) {
       return { type: 'exit-feedback-mode' }
@@ -156,11 +158,17 @@ export function resolveChatKeyboardAction(
         ? { type: 'exit-feedback-mode' }
         : { type: 'clear-feedback-input' }
     }
+    if (isCtrlV) {
+      return { type: 'paste' }
+    }
+    return { type: 'none' }
   }
 
   // Priority 2: Non-default input mode escape
   // Escape should exit the current mode BEFORE interrupting streams
-  if (isEscape && state.inputMode !== 'default') {
+  // Exception: modes with blockKeyboardExit cannot be escaped
+  const modeConfig = getInputModeConfig(state.inputMode)
+  if (isEscape && state.inputMode !== 'default' && !modeConfig.blockKeyboardExit) {
     return { type: 'exit-input-mode' }
   }
 
@@ -178,10 +186,12 @@ export function resolveChatKeyboardAction(
   }
 
   // Priority 5: Backspace at position 0 exits non-default mode
+  // Exception: modes with blockKeyboardExit cannot be exited via keyboard
   if (
     isBackspace &&
     state.cursorPosition === 0 &&
     state.inputMode !== 'default' &&
+    !modeConfig.blockKeyboardExit &&
     state.inputValue.length === 0
   ) {
     return { type: 'backspace-exit-mode' }
@@ -304,7 +314,14 @@ export function resolveChatKeyboardAction(
     return { type: 'history-down' }
   }
 
-  // Priority 11: Agent mode toggle (tab or shift-tab when not in menus)
+  // Priority 11: Toggle all collapsed/expanded (Ctrl+T)
+  const isCtrlT = key.ctrl && key.name === 't' && !key.meta && !key.option
+
+  if (isCtrlT) {
+    return { type: 'toggle-all' }
+  }
+
+  // Priority 12: Agent mode toggle (tab or shift-tab when not in menus)
   if (
     (isShiftTab || isTab) &&
     !state.slashMenuActive &&
@@ -313,12 +330,12 @@ export function resolveChatKeyboardAction(
     return { type: 'toggle-agent-mode' }
   }
 
-  // Priority 12: Unfocus agent
+  // Priority 13: Unfocus agent
   if (isEscape && state.focusedAgentId !== null) {
     return { type: 'unfocus-agent' }
   }
 
-  // Priority 13: Scroll with PageUp/PageDown
+  // Priority 14: Scroll with PageUp/PageDown
   if (isPageUp) {
     return { type: 'scroll-up' }
   }
@@ -326,12 +343,12 @@ export function resolveChatKeyboardAction(
     return { type: 'scroll-down' }
   }
 
-  // Priority 14: Paste (ctrl-v)
+  // Priority 15: Paste (ctrl-v)
   if (isCtrlV) {
     return { type: 'paste' }
   }
 
-  // Priority 15: Exit app (ctrl-c double-tap)
+  // Priority 16: Exit app (ctrl-c double-tap)
   if (isCtrlC) {
     if (state.nextCtrlCWillExit) {
       return { type: 'exit-app' }

@@ -5,7 +5,7 @@
  * process env with CLI-specific vars for terminal/IDE detection.
  */
 
-import { getBaseEnv } from '@codebuff/common/env-process'
+import { getBaseEnv } from '@khiwniti/common/env-process'
 
 import type { CliEnv } from '../types/env'
 
@@ -15,6 +15,21 @@ import type { CliEnv } from '../types/env'
  */
 export const getCliEnv = (): CliEnv => ({
   ...getBaseEnv(),
+
+  // Display server detection (Linux headless check)
+  DISPLAY: process.env.DISPLAY,
+  WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY,
+
+  // Terminal detection (for tmux/screen passthrough)
+  TERM: process.env.TERM,
+  TMUX: process.env.TMUX,
+  STY: process.env.STY,
+
+  // SSH/remote session detection
+  SSH_CLIENT: process.env.SSH_CLIENT,
+  SSH_TTY: process.env.SSH_TTY,
+  SSH_CONNECTION: process.env.SSH_CONNECTION,
+  CODESPACES: process.env.CODESPACES,
 
   // Terminal detection
   KITTY_WINDOW_ID: process.env.KITTY_WINDOW_ID,
@@ -59,6 +74,9 @@ export const getCliEnv = (): CliEnv => ({
   CODEBUFF_RG_PATH: process.env.CODEBUFF_RG_PATH,
   CODEBUFF_SCROLL_MULTIPLIER: process.env.CODEBUFF_SCROLL_MULTIPLIER,
   CODEBUFF_PERF_TEST: process.env.CODEBUFF_PERF_TEST,
+  CODEBUFF_TRACE: process.env.CODEBUFF_TRACE,
+  CODEBUFF_SHIP_LOGS: process.env.CODEBUFF_SHIP_LOGS,
+  FREEBUFF_MODE: process.env.FREEBUFF_MODE,
 })
 
 /**

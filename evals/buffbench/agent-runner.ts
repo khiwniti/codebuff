@@ -1,22 +1,23 @@
-import { execSync } from 'child_process'
+import { execSync, exec } from 'child_process'
 import { promisify } from 'util'
-import { exec } from 'child_process'
 
 const execAsync = promisify(exec)
 
-import { withTimeout } from '@codebuff/common/util/promise'
-import { CodebuffClient } from '@codebuff/sdk'
+import { withTimeout } from '@khiwniti/common/util/promise'
+
 import { withTestRepo } from '../subagents/test-repo-utils'
 import { ClaudeRunner } from './runners/claude'
-import { CodexRunner } from './runners/codex'
 import { CodebuffRunner } from './runners/codebuff'
+import { CodexRunner } from './runners/codex'
+import { OpenCodeRunner } from './runners/opencode'
 
-import type { EvalCommitV2, FinalCheckOutput } from './types'
 import type { Runner, AgentStep } from './runners/runner'
+import type { EvalCommitV2, FinalCheckOutput } from './types'
+import type { CodebuffClient } from '@khiwniti/sdk'
 
 export type { AgentStep }
 
-export type ExternalAgentType = 'claude' | 'codex'
+export type ExternalAgentType = 'claude' | 'codex' | 'opencode'
 
 export async function runAgentOnCommit({
   client,
@@ -75,6 +76,8 @@ export async function runAgentOnCommit({
             runner = new ClaudeRunner(repoDir, env)
           } else if (externalAgentType === 'codex') {
             runner = new CodexRunner(repoDir, env)
+          } else if (externalAgentType === 'opencode') {
+            runner = new OpenCodeRunner(repoDir, env)
           } else {
             runner = new CodebuffRunner({
               cwd: repoDir,

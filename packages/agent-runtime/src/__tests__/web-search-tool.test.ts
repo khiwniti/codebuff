@@ -1,12 +1,10 @@
-import * as bigquery from '@codebuff/bigquery'
-import * as analytics from '@codebuff/common/analytics'
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { success } from '@codebuff/common/util/error'
+import * as analytics from '@khiwniti/common/analytics'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
+import { promptSuccess, success } from '@khiwniti/common/util/error'
 import {
   afterEach,
-
   beforeEach,
   describe,
   expect,
@@ -16,7 +14,7 @@ import {
 } from 'bun:test'
 
 import { createToolCallChunk, mockFileContext } from './test-utils'
-import researcherAgent from '../../../../agents/researcher/researcher'
+import researcherAgent from '../../../../agents-graveyard/researcher/researcher'
 import * as webApi from '../llm-api/codebuff-web-api'
 import { runAgentStep } from '../run-agent-step'
 import { assembleLocalAgentTemplates } from '../templates/agent-registry'
@@ -24,22 +22,22 @@ import { assembleLocalAgentTemplates } from '../templates/agent-registry'
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
-} from '@codebuff/common/types/contracts/agent-runtime'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
+} from '@khiwniti/common/types/contracts/agent-runtime'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
 
 let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
 let runAgentStepBaseParams: ParamsExcluding<
   typeof runAgentStep,
   'localAgentTemplates' | 'agentState' | 'prompt' | 'agentTemplate'
 >
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
+import type { StreamChunk } from '@khiwniti/common/types/contracts/llm'
 
 function mockAgentStream(chunks: StreamChunk[]) {
   runAgentStepBaseParams.promptAiSdkStream = async function* ({}) {
     for (const chunk of chunks) {
       yield chunk
     }
-    return 'mock-message-id'
+    return promptSuccess('mock-message-id')
   }
 }
 
@@ -72,11 +70,8 @@ describe('web_search tool with researcher agent (via web API facade)', () => {
       userInputId: 'test-input',
     }
 
-    // Mock analytics and tracing
+    // Mock analytics
     spyOn(analytics, 'trackEvent').mockImplementation(() => {})
-    spyOn(bigquery, 'insertTrace').mockImplementation(() =>
-      Promise.resolve(true),
-    )
 
     // Mock websocket actions
     runAgentStepBaseParams.requestFiles = async () => ({})
@@ -87,7 +82,7 @@ describe('web_search tool with researcher agent (via web API facade)', () => {
 
     // Mock LLM APIs
     runAgentStepBaseParams.promptAiSdk = async function () {
-      return 'Test response'
+      return promptSuccess('Test response')
     }
   })
 
@@ -247,7 +242,7 @@ describe('web_search tool with researcher agent (via web API facade)', () => {
 
   test('should handle API errors gracefully', async () => {
     spyOn(webApi, 'callWebSearchAPI').mockResolvedValue({
-      error: 'Linkup API timeout',
+      error: 'Serper API timeout',
     })
 
     mockAgentStream([
@@ -279,7 +274,7 @@ describe('web_search tool with researcher agent (via web API facade)', () => {
     expect(toolMsgs.length).toBeGreaterThan(0)
     const last = JSON.stringify(toolMsgs[toolMsgs.length - 1].content)
     expect(last).toContain('errorMessage')
-    expect(last).toContain('Linkup API timeout')
+    expect(last).toContain('Serper API timeout')
   })
 
   test('should handle non-Error exceptions from facade', async () => {

@@ -3,11 +3,13 @@
  */
 export type ToolName =
   | 'add_message'
+  | 'apply_patch'
   | 'ask_user'
   | 'code_search'
   | 'end_turn'
   | 'find_files'
   | 'glob'
+  | 'gravity_index'
   | 'list_directory'
   | 'lookup_agent_info'
   | 'propose_str_replace'
@@ -15,10 +17,13 @@ export type ToolName =
   | 'read_docs'
   | 'read_files'
   | 'read_subtree'
+  | 'read_url'
+  | 'render_ui'
   | 'run_file_change_hooks'
   | 'run_terminal_command'
   | 'set_messages'
   | 'set_output'
+  | 'skill'
   | 'spawn_agents'
   | 'str_replace'
   | 'suggest_followups'
@@ -33,11 +38,13 @@ export type ToolName =
  */
 export interface ToolParamsMap {
   add_message: AddMessageParams
+  apply_patch: ApplyPatchParams
   ask_user: AskUserParams
   code_search: CodeSearchParams
   end_turn: EndTurnParams
   find_files: FindFilesParams
   glob: GlobParams
+  gravity_index: GravityIndexParams
   list_directory: ListDirectoryParams
   lookup_agent_info: LookupAgentInfoParams
   propose_str_replace: ProposeStrReplaceParams
@@ -45,10 +52,13 @@ export interface ToolParamsMap {
   read_docs: ReadDocsParams
   read_files: ReadFilesParams
   read_subtree: ReadSubtreeParams
+  read_url: ReadUrlParams
+  render_ui: RenderUiParams
   run_file_change_hooks: RunFileChangeHooksParams
   run_terminal_command: RunTerminalCommandParams
   set_messages: SetMessagesParams
   set_output: SetOutputParams
+  skill: SkillParams
   spawn_agents: SpawnAgentsParams
   str_replace: StrReplaceParams
   suggest_followups: SuggestFollowupsParams
@@ -65,6 +75,21 @@ export interface ToolParamsMap {
 export interface AddMessageParams {
   role: 'user' | 'assistant'
   content: string
+}
+
+/**
+ * Apply a file operation (create, update, or delete) using Codex-style apply_patch format.
+ */
+export interface ApplyPatchParams {
+  /** The file operation to perform. */
+  operation: {
+    /** Operation type: create_file, update_file, or delete_file */
+    type: 'create_file' | 'update_file' | 'delete_file'
+    /** File path relative to project root */
+    path: string
+    /** Diff content. Required for create_file and update_file. Lines prefixed with + for creates, unified diff with @@ hunks for updates. */
+    diff?: string
+  }
 }
 
 /**
@@ -138,6 +163,33 @@ export interface GlobParams {
 }
 
 /**
+ * Use the Gravity Index tool discovery and install API.
+ */
+export interface GravityIndexParams {
+  /** Which Gravity Index operation to perform. search: recommend a provider; browse: list catalog services; list_categories: list categories with counts; get_service: full detail for a known slug; report_integration: report a completed integration. */
+  action:
+    | 'search'
+    | 'browse'
+    | 'list_categories'
+    | 'get_service'
+    | 'report_integration'
+  /** For action "search": what the user needs, including stack, constraints, and required capabilities. */
+  query?: string
+  /** For action "search": continue a previous search. For action "report_integration": the search_id from the earlier search result (required). */
+  search_id?: string
+  /** For action "search": optional structured JSON context about the project, stack, or constraints. */
+  context?: Record<string, any>
+  /** For action "browse": optional category filter, e.g. Database, Auth, Payments, Hosting, Email, AI. */
+  category?: string
+  /** For action "browse": optional keyword filter, e.g. sendgrid or postgres. */
+  q?: string
+  /** For action "get_service": service slug, e.g. supabase, stripe, sendgrid (required). */
+  slug?: string
+  /** For action "report_integration": slug of the service that was actually integrated (required). */
+  integrated_slug?: string
+}
+
+/**
  * List files and directories in the specified path. Returns separate arrays of file names and directory names.
  */
 export interface ListDirectoryParams {
@@ -162,10 +214,10 @@ export interface ProposeStrReplaceParams {
   /** Array of replacements to make. */
   replacements: {
     /** The string to replace. This must be an *exact match* of the string you want to replace, including whitespace and punctuation. */
-    old: string
-    /** The string to replace the corresponding old string with. Can be empty to delete. */
-    new: string
-    /** Whether to allow multiple replacements of old string. */
+    oldString: string
+    /** The string to replace the corresponding oldString with. Can be empty to delete. */
+    newString: string
+    /** Whether to allow multiple replacements of oldString. */
     allowMultiple?: boolean
   }[]
 }
@@ -213,6 +265,33 @@ export interface ReadSubtreeParams {
 }
 
 /**
+ * Fetch a URL and extract readable text from the page.
+ */
+export interface ReadUrlParams {
+  /** The full http:// or https:// URL to fetch and extract readable text from. */
+  url: string
+  /** Maximum number of extracted text characters to return. Defaults to 20000. */
+  max_chars?: number
+}
+
+/**
+ * Render a small interactive UI widget in the Codebuff CLI. Currently supports a button that opens a link.
+ */
+export interface RenderUiParams {
+  /** The UI widget to render. */
+  widget: {
+    /** Widget type. Currently, the only supported widget is button. */
+    type: 'button'
+    /** Short button label shown to the user. */
+    text: string
+    /** The http:// or https:// URL to open when the user clicks the button. */
+    link: string
+    /** Theme-aware color treatment. Use primary for the main action and secondary for lower-emphasis actions. */
+    variant?: 'primary' | 'secondary'
+  }
+}
+
+/**
  * Parameters for run_file_change_hooks tool
  */
 export interface RunFileChangeHooksParams {
@@ -247,6 +326,14 @@ export interface SetMessagesParams {
 export interface SetOutputParams {}
 
 /**
+ * Load a skill's full instructions when relevant to the current task. Skills are loaded on-demand - only load them when you need their specific guidance.
+ */
+export interface SkillParams {
+  /** The name of the skill to load */
+  name: string
+}
+
+/**
  * Spawn multiple agents and send a prompt and/or parameters to each of them. These agents will run in parallel. Note that that means they will run independently. If you need to run agents sequentially, use spawn_agents with one agent at a time instead.
  */
 export interface SpawnAgentsParams {
@@ -269,10 +356,10 @@ export interface StrReplaceParams {
   /** Array of replacements to make. */
   replacements: {
     /** The string to replace. This must be an *exact match* of the string you want to replace, including whitespace and punctuation. */
-    old: string
-    /** The string to replace the corresponding old string with. Can be empty to delete. */
-    new: string
-    /** Whether to allow multiple replacements of old string. */
+    oldString: string
+    /** The string to replace the corresponding oldString with. Can be empty to delete. */
+    newString: string
+    /** Whether to allow multiple replacements of oldString. */
     allowMultiple?: boolean
   }[]
 }
@@ -309,7 +396,7 @@ export interface ThinkDeeplyParams {
 }
 
 /**
- * Search the web for current information using Linkup API.
+ * Search the web for current information using Serper API.
  */
 export interface WebSearchParams {
   /** The search query to find relevant web content */

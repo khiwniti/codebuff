@@ -1,13 +1,19 @@
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
+import os from 'os'
+import path from 'path'
+
 import { describe, expect, test, beforeEach } from 'bun:test'
 import { z } from 'zod/v4'
 
 import { initialSessionState } from '../run-state'
 
-import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { MockStatResult } from '@khiwniti/common/testing/mock-types'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { CodebuffFileSystem } from '@khiwniti/common/types/filesystem'
 
 describe('Initial Session State', () => {
   let mockFs: CodebuffFileSystem
-  let mockLogger: any
+  let mockLogger: Logger
 
   beforeEach(() => {
     mockFs = {
@@ -51,21 +57,20 @@ describe('Initial Session State', () => {
               isDirectory: () => false,
               isFile: () => true,
             },
-          ] as any
+          ]
         }
         if (path.includes('src')) {
           return [
             { name: 'index.ts', isDirectory: () => false, isFile: () => true },
             { name: 'utils.ts', isDirectory: () => false, isFile: () => true },
-          ] as any
+          ]
         }
         return []
       },
-      stat: async (path: string) =>
-        ({
-          isDirectory: () => path.includes('src') || path.includes('.git'),
-          isFile: () => !path.includes('src') && !path.includes('.git'),
-        }) as any,
+      stat: async (path: string): Promise<MockStatResult> => ({
+        isDirectory: () => path.includes('src') || path.includes('.git'),
+        isFile: () => !path.includes('src') && !path.includes('.git'),
+      }),
       exists: async (path: string) => {
         if (path.includes('.gitignore')) return true
         if (path.includes('.codebuffignore')) return true
@@ -76,7 +81,9 @@ describe('Initial Session State', () => {
         if (path.includes('README.md')) return true
         return false
       },
-    } as any
+      mkdir: async () => {},
+      writeFile: async () => {},
+    } as unknown as CodebuffFileSystem
 
     mockLogger = {
       debug: () => {},
@@ -109,6 +116,31 @@ describe('Initial Session State', () => {
   })
 
   test('discovers project files automatically when projectFiles is undefined', async () => {
+    mockFs.readdir = (async (dirPath: string) => {
+      if (dirPath === '/test-project') {
+        return ['src', '.git', 'knowledge.md', 'README.md', '.gitignore']
+      }
+      if (dirPath === '/test-project/src') {
+        return ['index.ts', 'utils.ts', 'generated.ts']
+      }
+      return []
+    }) as CodebuffFileSystem['readdir']
+    mockFs.stat = (async (filePath: string) =>
+      ({
+        isDirectory: () =>
+          filePath === '/test-project/src' || filePath === '/test-project/.git',
+        isFile: () =>
+          filePath !== '/test-project/src' && filePath !== '/test-project/.git',
+        size: filePath.endsWith('generated.ts') ? 1_000_001 : 100,
+      }) as MockStatResult & { size: number }) as CodebuffFileSystem['stat']
+
+    const readFilePaths: string[] = []
+    const originalReadFile = mockFs.readFile
+    mockFs.readFile = (async (filePath: string, encoding?: BufferEncoding) => {
+      readFilePaths.push(filePath)
+      return originalReadFile(filePath, encoding)
+    }) as CodebuffFileSystem['readFile']
+
     const sessionState = await initialSessionState({
       cwd: '/test-project',
       projectFiles: undefined,
@@ -119,6 +151,13 @@ describe('Initial Session State', () => {
     expect(sessionState.fileContext.fileTree).toBeDefined()
     expect(sessionState.mainAgentState.agentId).toBe('main-agent')
     expect(sessionState.mainAgentState.messageHistory).toEqual([])
+    expect(readFilePaths.some((p) => p.endsWith('src/index.ts'))).toBe(true)
+    expect(readFilePaths.some((p) => p.endsWith('src/utils.ts'))).toBe(true)
+    expect(readFilePaths.some((p) => p.endsWith('src/generated.ts'))).toBe(
+      false,
+    )
+    expect(readFilePaths.some((p) => p.endsWith('README.md'))).toBe(false)
+    expect(readFilePaths.some((p) => p.endsWith('knowledge.md'))).toBe(true)
   })
 
   test('derives knowledgeFiles from projectFiles when not provided', async () => {
@@ -305,6 +344,62 @@ describe('Initial Session State', () => {
       process.version,
     )
     expect(sessionState.fileContext.systemInfo.cpus).toBeGreaterThan(0)
+  })
+
+  test('loads skills from skillsDir when provided', async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sdk-skills-test-'))
+    try {
+      const skillDir = path.join(tmpDir, 'my-skill')
+      mkdirSync(skillDir, { recursive: true })
+      writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        [
+          '---',
+          'name: my-skill',
+          'description: A test skill',
+          '---',
+          '',
+          '# My Skill',
+          '',
+          'Some instructions here.',
+        ].join('\n'),
+      )
+
+      const sessionState = await initialSessionState({
+        cwd: '/test-project',
+        skillsDir: tmpDir,
+        projectFiles: { 'src/index.ts': 'console.log("hello");' },
+        fs: mockFs,
+        logger: mockLogger,
+      })
+
+      expect(sessionState.fileContext.skills).toBeDefined()
+      expect(sessionState.fileContext.skills!['my-skill']).toBeDefined()
+      expect(sessionState.fileContext.skills!['my-skill'].name).toBe('my-skill')
+      expect(sessionState.fileContext.skills!['my-skill'].description).toBe(
+        'A test skill',
+      )
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  test('skillsDir with no valid skills results in empty skills map', async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'sdk-skills-test-'))
+    try {
+      const sessionState = await initialSessionState({
+        cwd: '/test-project',
+        skillsDir: tmpDir,
+        projectFiles: { 'src/index.ts': 'console.log("hello");' },
+        fs: mockFs,
+        logger: mockLogger,
+      })
+
+      expect(sessionState.fileContext.skills).toBeDefined()
+      expect(Object.keys(sessionState.fileContext.skills!)).toHaveLength(0)
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 
   test('initializes empty agent state correctly', async () => {

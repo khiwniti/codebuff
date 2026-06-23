@@ -1,5 +1,5 @@
-import { KNOWLEDGE_FILE_NAMES_LOWERCASE } from '@codebuff/common/constants/knowledge'
-import { escapeString } from '@codebuff/common/util/string'
+import { KNOWLEDGE_FILE_NAMES_LOWERCASE } from '@khiwniti/common/constants/knowledge'
+import { escapeString } from '@khiwniti/common/util/string'
 import { z } from 'zod/v4'
 
 import { getAgentTemplate } from './agent-registry'
@@ -13,21 +13,29 @@ import {
 import { parseUserMessage } from '../util/messages'
 
 import type { AgentTemplate, PlaceholderValue } from './types'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
 import type {
   Message,
   UserMessage,
-} from '@codebuff/common/types/messages/codebuff-message'
-import type { TextPart } from '@codebuff/common/types/messages/content-part'
+} from '@khiwniti/common/types/messages/codebuff-message'
+import type { TextPart } from '@khiwniti/common/types/messages/content-part'
 import type {
   AgentState,
   AgentTemplateType,
-} from '@codebuff/common/types/session-state'
+} from '@khiwniti/common/types/session-state'
 import type {
   CustomToolDefinitions,
   ProjectFileContext,
-} from '@codebuff/common/util/file'
+} from '@khiwniti/common/util/file'
+
+export function formatCurrentDate(date: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(date)
+}
 
 export async function formatPrompt(
   params: {
@@ -50,11 +58,11 @@ export async function formatPrompt(
   const {
     fileContext,
     agentState,
-    tools,
-    spawnableAgents,
+    tools: _tools,
+    spawnableAgents: _spawnableAgents,
     agentTemplates,
     intitialAgentPrompt,
-    additionalToolDefinitions,
+    additionalToolDefinitions: _additionalToolDefinitions,
     logger,
   } = params
   let { prompt } = params
@@ -85,6 +93,7 @@ export async function formatPrompt(
   const toInject: Record<PlaceholderValue, () => string | Promise<string>> = {
     [PLACEHOLDER.AGENT_NAME]: () =>
       agentTemplate ? agentTemplate.displayName || 'Unknown Agent' : 'Buffy',
+    [PLACEHOLDER.CURRENT_DATE]: () => formatCurrentDate(new Date()),
     [PLACEHOLDER.FILE_TREE_PROMPT_SMALL]: () =>
       getProjectFileTreePrompt({
         fileContext,
@@ -166,7 +175,7 @@ export async function getAgentPrompt<T extends StringField>(
     promptType,
     agentState,
     agentTemplates,
-    additionalToolDefinitions,
+    additionalToolDefinitions: _additionalToolDefinitions,
     useParentTools,
   } = params
 
@@ -226,7 +235,7 @@ export async function getAgentPrompt<T extends StringField>(
     if (outputSchema) {
       addendum += '\n\n## Output Schema\n\n'
       addendum +=
-        'When using the set_output tool, your output must conform to this schema:\n\n'
+        'When using the set_output tool, your output must conform to this schema. You may pass the fields either directly as top-level parameters or inside a `data` field — both are accepted.\n\n'
       addendum += '```json\n'
       try {
         // Convert Zod schema to JSON schema for display

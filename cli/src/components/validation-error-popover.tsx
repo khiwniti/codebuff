@@ -1,4 +1,4 @@
-import { pluralize } from '@codebuff/common/util/string'
+import { pluralize } from '@khiwniti/common/util/string'
 import React, { useState } from 'react'
 
 import { Button } from './button'
@@ -10,12 +10,13 @@ import { formatValidationError } from '../utils/validation-error-formatting'
 import { NETWORK_ERROR_ID } from '../utils/validation-error-helpers'
 
 import type { LocalAgentInfo } from '../utils/local-agent-registry'
+import type { FeedbackCategory } from '@khiwniti/common/constants/feedback'
 
 
 interface ValidationErrorPopoverProps {
   errors: Array<{ id: string; message: string }>
   onOpenFeedback?: (options: {
-    category: string
+    category: FeedbackCategory
     footerMessage: string
     errors: Array<{ id: string; message: string }>
   }) => void
@@ -77,9 +78,10 @@ export const ValidationErrorPopover: React.FC<ValidationErrorPopoverProps> = ({
         </box>
 
         <box style={{ flexDirection: 'column', paddingTop: 1, gap: 0 }}>
-          {errors.slice(0, 3).map((error) => {
-            const agentId = error.id.replace(/_\d+$/, '')
-            const isNetworkError = error.id === NETWORK_ERROR_ID
+          {errors.slice(0, 3).map((error, index) => {
+            const errorId = error.id ?? ''
+            const agentId = errorId.replace(/_\d+$/, '')
+            const isNetworkError = errorId === NETWORK_ERROR_ID
             const agentInfo = loadedAgentsData?.agents.find(
               (a) => a.id === agentId,
             ) as LocalAgentInfo | undefined
@@ -91,7 +93,7 @@ export const ValidationErrorPopover: React.FC<ValidationErrorPopoverProps> = ({
             if (isNetworkError) {
               return (
                 <box
-                  key={error.id}
+                  key={errorId || `error-${index}`}
                   style={{ flexDirection: 'column', paddingTop: 0.5 }}
                 >
                   <text style={{ fg: theme.muted, wrapMode: 'word' }}>
@@ -104,7 +106,7 @@ export const ValidationErrorPopover: React.FC<ValidationErrorPopoverProps> = ({
             if (agentInfo?.filePath) {
               return (
                 <box
-                  key={error.id}
+                  key={errorId || `error-${index}`}
                   style={{ flexDirection: 'column', paddingTop: 0.5 }}
                 >
                   <text style={{ fg: theme.muted, wrapMode: 'word' }}>
@@ -131,11 +133,11 @@ export const ValidationErrorPopover: React.FC<ValidationErrorPopoverProps> = ({
 
             return (
               <box
-                key={error.id}
+                key={errorId || `error-${index}`}
                 style={{ flexDirection: 'column', paddingTop: 0.5 }}
               >
                 <text style={{ fg: theme.muted, wrapMode: 'word' }}>
-                  {`• ${agentId}`}
+                  {`• ${agentId || 'Unknown'}`}
                 </text>
                 <text
                   style={{

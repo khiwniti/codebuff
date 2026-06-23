@@ -1,7 +1,7 @@
 import * as path from 'path'
 
-import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
-import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { CodebuffToolOutput } from '@khiwniti/common/tools/list'
+import type { CodebuffFileSystem } from '@khiwniti/common/types/filesystem'
 
 export async function listDirectory(params: {
   directoryPath: string

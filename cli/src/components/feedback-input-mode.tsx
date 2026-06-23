@@ -6,20 +6,24 @@ import { MultilineInput, type MultilineInputHandle } from './multiline-input'
 import { Separator } from './separator'
 import { useTheme } from '../hooks/use-theme'
 import { useChatStore } from '../state/chat-store'
-import { BORDER_CHARS } from '../utils/ui-constants'
+import { IS_FREEBUFF } from '../utils/constants'
 import { createTextPasteHandler } from '../utils/strings'
+import { isPlainEnterKey } from '../utils/terminal-enter-detection'
+import { BORDER_CHARS } from '../utils/ui-constants'
+
+import type { FeedbackCategory } from '@khiwniti/common/constants/feedback'
 
 type CategoryHighlightKey = 'success' | 'error' | 'warning' | 'info'
 
 type CategoryOption = {
-  id: 'good_result' | 'bad_result' | 'app_bug' | 'other'
+  id: FeedbackCategory
   label: string
   shortLabel: string
   highlightKey: CategoryHighlightKey
   placeholder: string
 }
 
-const CATEGORY_OPTIONS: readonly CategoryOption[] = [
+const CATEGORY_OPTIONS = [
   {
     id: 'good_result',
     label: 'Good result',
@@ -41,8 +45,9 @@ const CATEGORY_OPTIONS: readonly CategoryOption[] = [
     label: 'App bug',
     shortLabel: 'Bug',
     highlightKey: 'warning',
-    placeholder:
-      'Report a problem with Codebuff (crashes, errors, UI issues, etc.)',
+    placeholder: IS_FREEBUFF
+      ? 'Report a problem with Freebuff (crashes, errors, UI issues, etc.)'
+      : 'Report a problem with Codebuff (crashes, errors, UI issues, etc.)',
   },
   {
     id: 'other',
@@ -51,7 +56,15 @@ const CATEGORY_OPTIONS: readonly CategoryOption[] = [
     highlightKey: 'info',
     placeholder: 'Tell us more (what happened, what you expected)...',
   },
-] as const
+] as const satisfies readonly CategoryOption[]
+
+// Compile-time exhaustiveness: ensures every FeedbackCategory has a CATEGORY_OPTIONS entry.
+// If a new category is added to FEEDBACK_CATEGORIES, TypeScript will error here until
+// a corresponding entry is added to CATEGORY_OPTIONS above.
+type CoveredCategories = (typeof CATEGORY_OPTIONS)[number]['id']
+type _AssertAllCategoriesCovered = [FeedbackCategory] extends [CoveredCategories] ? true : never
+const _exhaustiveCheck: _AssertAllCategoriesCovered = true
+void _exhaustiveCheck
 
 const FEEDBACK_CONTAINER_HORIZONTAL_INSET = 4 // border + padding on each side
 const CATEGORY_BUTTON_EXTRA_WIDTH = 6 // indicator + padding + border
@@ -77,6 +90,7 @@ interface FeedbackTextSectionProps {
   placeholder: string
   inputRef?: React.MutableRefObject<MultilineInputHandle | null>
   width: number
+  isSubmitting?: boolean
 }
 
 const FeedbackTextSection: React.FC<FeedbackTextSectionProps> = ({
@@ -88,6 +102,7 @@ const FeedbackTextSection: React.FC<FeedbackTextSectionProps> = ({
   placeholder,
   inputRef,
   width,
+  isSubmitting = false,
 }) => {
   const inputFocused = useChatStore((state) => state.inputFocused)
 
@@ -106,8 +121,7 @@ const FeedbackTextSection: React.FC<FeedbackTextSectionProps> = ({
           }}
           onSubmit={onSubmit}
           onKeyIntercept={(key) => {
-            const isEnter = key.name === 'return' || key.name === 'enter'
-            if (!isEnter) return false
+            if (!isPlainEnterKey(key)) return false
             // Just add newline on Enter
             const newText = value.slice(0, cursor) + '\n' + value.slice(cursor)
             onChange(newText)
@@ -119,7 +133,7 @@ const FeedbackTextSection: React.FC<FeedbackTextSectionProps> = ({
             onCursorChange(cursorPosition)
           })}
           placeholder={placeholder}
-          focused={inputFocused}
+          focused={inputFocused && !isSubmitting}
           maxHeight={5}
           minHeight={3}
           ref={inputRef}
@@ -136,15 +150,16 @@ const FeedbackTextSection: React.FC<FeedbackTextSectionProps> = ({
 interface FeedbackInputModeProps {
   value: string
   cursor: number
-  feedbackCategory: string
+  feedbackCategory: FeedbackCategory
   onChange: (text: string) => void
   onCursorChange: (cursor: number) => void
-  onCategoryChange: (category: string) => void
+  onCategoryChange: (category: FeedbackCategory) => void
   onSubmit: () => void
   onCancel: () => void
   inputRef?: React.MutableRefObject<any>
   width: number
   footerMessage?: string | null
+  isSubmitting?: boolean
 }
 
 export const FeedbackInputMode: React.FC<FeedbackInputModeProps> = ({
@@ -159,11 +174,12 @@ export const FeedbackInputMode: React.FC<FeedbackInputModeProps> = ({
   inputRef: externalInputRef,
   width,
   footerMessage,
+  isSubmitting = false,
 }) => {
   const theme = useTheme()
   const internalInputRef = useRef<MultilineInputHandle | null>(null)
   const inputRef = externalInputRef || internalInputRef
-  const canSubmit = value.trim().length > 0
+  const canSubmit = value.trim().length > 0 && !isSubmitting
   const [closeButtonHovered, setCloseButtonHovered] = useState(false)
   const availableWidth = Math.max(
     0,
@@ -265,16 +281,19 @@ export const FeedbackInputMode: React.FC<FeedbackInputModeProps> = ({
       <FeedbackTextSection
         value={value}
         cursor={cursor}
-        onChange={onChange}
-        onCursorChange={onCursorChange}
+        onChange={isSubmitting ? () => {} : onChange}
+        onCursorChange={isSubmitting ? () => {} : onCursorChange}
         onSubmit={onSubmit}
         placeholder={
-          CATEGORY_OPTIONS.find((opt) => opt.id === feedbackCategory)
-            ?.placeholder ||
-          'Tell us more (what happened, what you expected)...'
+          isSubmitting
+            ? 'Sending feedback...'
+            : CATEGORY_OPTIONS.find((opt) => opt.id === feedbackCategory)
+                ?.placeholder ||
+              'Tell us more (what happened, what you expected)...'
         }
         inputRef={inputRef}
         width={width}
+        isSubmitting={isSubmitting}
       />
 
       {/* Footer with auto-attached info and submit button */}
@@ -314,7 +333,9 @@ export const FeedbackInputMode: React.FC<FeedbackInputModeProps> = ({
               canSubmit ? undefined : TextAttributes.DIM | TextAttributes.ITALIC
             }
           >
-            <span fg={canSubmit ? theme.foreground : theme.muted}>SUBMIT</span>
+            <span fg={canSubmit ? theme.foreground : theme.muted}>
+              {isSubmitting ? 'SENDING...' : 'SUBMIT'}
+            </span>
           </text>
         </Button>
       </box>

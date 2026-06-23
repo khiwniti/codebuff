@@ -1,5 +1,6 @@
-import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
-import open from 'open'
+import { AnalyticsEvent } from '@khiwniti/common/constants/analytics-events'
+import type { FeedbackCategory } from '@khiwniti/common/constants/feedback'
+import { safeOpen } from './utils/open-url'
 import {
   useCallback,
   useEffect,
@@ -12,20 +13,26 @@ import { useShallow } from 'zustand/react/shallow'
 
 import { getAdsEnabled } from './commands/ads'
 import { routeUserPrompt, addBashMessageToHistory } from './commands/router'
-import { AdBanner } from './components/ad-banner'
+import { SingleAdBanner } from './components/ad-banner'
 import { ChatInputBar } from './components/chat-input-bar'
-import { BottomStatusLine } from './components/bottom-status-line'
-import { areCreditsRestored } from './components/out-of-credits-banner'
+import { FreebuffActiveSessionSummary } from './components/freebuff-active-session-summary'
 import { LoadPreviousButton } from './components/load-previous-button'
+import { ReviewScreen } from './components/review-screen'
 import { MessageWithAgents } from './components/message-with-agents'
+import { areCreditsRestored } from './components/out-of-credits-banner'
 import { PendingBashMessage } from './components/pending-bash-message'
+import { SessionEndedBanner } from './components/session-ended-banner'
 import { StatusBar } from './components/status-bar'
+import {
+  SuggestedPrompts,
+  DEFAULT_SUGGESTED_PROMPTS,
+  type SuggestedPromptSelection,
+} from './components/suggested-prompts'
 import { TopBanner } from './components/top-banner'
-import { SLASH_COMMANDS } from './data/slash-commands'
+import { getSlashCommandsWithSkills } from './data/slash-commands'
 import { useAgentValidation } from './hooks/use-agent-validation'
 import { useAskUserBridge } from './hooks/use-ask-user-bridge'
 import { useChatInput } from './hooks/use-chat-input'
-import { useClaudeQuotaQuery } from './hooks/use-claude-quota-query'
 import {
   useChatKeyboard,
   type ChatKeyboardHandlers,
@@ -34,51 +41,64 @@ import { useChatMessages } from './hooks/use-chat-messages'
 import { useChatState } from './hooks/use-chat-state'
 import { useChatStreaming } from './hooks/use-chat-streaming'
 import { useChatUI } from './hooks/use-chat-ui'
+import { useSubscriptionQuery } from './hooks/use-subscription-query'
 import { useClipboard } from './hooks/use-clipboard'
-import { useGravityAd } from './hooks/use-gravity-ad'
 import { useEvent } from './hooks/use-event'
+import { useGravityAd } from './hooks/use-gravity-ad'
 import { useInputHistory } from './hooks/use-input-history'
-import { type QueuedMessage } from './hooks/use-message-queue'
 import { usePublishMutation } from './hooks/use-publish-mutation'
 import { useSendMessage } from './hooks/use-send-message'
 import { useSuggestionEngine } from './hooks/use-suggestion-engine'
 import { useUsageMonitor } from './hooks/use-usage-monitor'
 import { WEBSITE_URL } from './login/constants'
 import { getProjectRoot } from './project-files'
-import { useChatStore } from './state/chat-store'
 import { useChatHistoryStore } from './state/chat-history-store'
+import { useChatStore } from './state/chat-store'
+import { useReviewStore } from './state/review-store'
 import { useFeedbackStore } from './state/feedback-store'
 import { useMessageBlockStore } from './state/message-block-store'
 import { usePublishStore } from './state/publish-store'
-import {
-  addClipboardPlaceholder,
-  addPendingImageFromFile,
-  validateAndAddImage,
-} from './utils/pending-attachments'
+import { reportActivity } from './utils/activity-tracker'
+import { trackEvent } from './utils/analytics'
 import { showClipboardMessage } from './utils/clipboard'
 import { readClipboardImage } from './utils/clipboard-image'
+import { returnToFreebuffLanding } from './hooks/use-freebuff-session'
+import { END_SESSION_MESSAGE, IS_FREEBUFF } from './utils/constants'
+import { getSystemMessage } from './utils/message-history'
 import { getInputModeConfig } from './utils/input-modes'
+import {
+  hasSubmittedFirstPrompt,
+  markFirstPromptSubmitted,
+} from './utils/settings'
+
 import {
   type ChatKeyboardState,
   createDefaultChatKeyboardState,
 } from './utils/keyboard-actions'
 import { loadLocalAgents } from './utils/local-agent-registry'
+import { logger } from './utils/logger'
+import {
+  addClipboardPlaceholder,
+  addPendingFileFromPath,
+  addPendingImageFromFile,
+  validateAndAddImage,
+} from './utils/pending-attachments'
+import { getLoadedSkills } from './utils/skill-registry'
 import {
   getStatusIndicatorState,
   type AuthStatus,
 } from './utils/status-indicator-state'
-import { getClaudeOAuthStatus } from './utils/claude-oauth'
 import { createPasteHandler } from './utils/strings'
+import { setTerminalTitle } from './utils/terminal-title'
 import { computeInputLayoutMetrics } from './utils/text-layout'
-import { reportActivity } from './utils/activity-tracker'
-import { trackEvent } from './utils/analytics'
-import { logger } from './utils/logger'
 
 import type { CommandResult } from './commands/command-registry'
 import type { MultilineInputHandle } from './components/multiline-input'
+import type { MatchedSlashCommand } from './hooks/use-suggestion-engine'
+import type { FreebuffSessionResponse } from './types/freebuff-session'
 import type { User } from './utils/auth'
 import type { AgentMode } from './utils/constants'
-import type { FileTreeNode } from '@codebuff/common/util/file'
+import type { FileTreeNode } from '@khiwniti/common/util/file'
 import type { ScrollBoxRenderable } from '@opentui/core'
 import type { UseMutationResult } from '@tanstack/react-query'
 import type { Dispatch, SetStateAction } from 'react'
@@ -98,6 +118,7 @@ export const Chat = ({
   initialMode,
   gitRoot,
   onSwitchToGitRoot,
+  freebuffSession,
 }: {
   headerContent: React.ReactNode
   initialPrompt: string | null
@@ -113,8 +134,15 @@ export const Chat = ({
   initialMode?: AgentMode
   gitRoot?: string | null
   onSwitchToGitRoot?: () => void
+  freebuffSession: FreebuffSessionResponse | null
 }) => {
   const [forceFileOnlyMentions, setForceFileOnlyMentions] = useState(false)
+
+  // First-time onboarding: show clickable starter prompts until the user
+  // submits their first prompt ever (persisted in settings). Freebuff only.
+  const [showSuggestedPrompts, setShowSuggestedPrompts] = useState(
+    () => IS_FREEBUFF && !hasSubmittedFirstPrompt(),
+  )
 
   const { validate: validateAgents } = useAgentValidation()
 
@@ -136,13 +164,10 @@ export const Chat = ({
     setSlashSelectedIndex,
     agentSelectedIndex,
     setAgentSelectedIndex,
-    streamingAgents,
     focusedAgentId,
     setFocusedAgentId,
     messages,
     setMessages,
-    activeSubagents,
-    isChainInProgress,
     agentMode,
     setAgentMode,
     toggleAgentMode,
@@ -158,7 +183,17 @@ export const Chat = ({
   } = useChatState()
 
   const { statusMessage } = useClipboard()
-  const { ad } = useGravityAd()
+
+  // Fetch subscription data early - needed for session credits tracking and ad gating
+  const { data: subscriptionData } = useSubscriptionQuery({
+    refetchInterval: 60 * 1000,
+  })
+  const hasSubscription = subscriptionData?.hasSubscription ?? false
+
+  const { ads, recordClick, recordImpression } = useGravityAd({
+    enabled: IS_FREEBUFF || !hasSubscription,
+    provider: 'gravity',
+  })
 
   // Set initial mode from CLI flag on mount
   useEffect(() => {
@@ -170,12 +205,12 @@ export const Chat = ({
   // Use extracted chat messages hook for message tree and pagination
   const {
     messageTree,
-    topLevelMessages,
     visibleTopLevelMessages,
     hiddenMessageCount,
     handleCollapseToggle,
     isUserCollapsing,
     handleLoadPreviousMessages,
+    handleToggleAll,
   } = useChatMessages({ messages, setMessages })
 
   // Use extracted UI hook for scroll, terminal dimensions, and theme
@@ -202,15 +237,21 @@ export const Chat = ({
   const setInputMode = useChatStore((state) => state.setInputMode)
   const askUserState = useChatStore((state) => state.askUserState)
 
+  // Get loaded skills for slash commands
+  const loadedSkills = useMemo(() => getLoadedSkills(), [])
+
   // Filter slash commands based on current ads state - only show the option that changes state
+  // Hide both ads commands entirely for subscribers
+  // Also merge in skill commands
   const filteredSlashCommands = useMemo(() => {
     const adsEnabled = getAdsEnabled()
-    return SLASH_COMMANDS.filter((cmd) => {
-      if (cmd.id === 'ads:enable') return !adsEnabled
-      if (cmd.id === 'ads:disable') return adsEnabled
+    const allCommands = getSlashCommandsWithSkills(loadedSkills)
+    return allCommands.filter((cmd) => {
+      if (cmd.id === 'ads:enable') return !hasSubscription && !adsEnabled
+      if (cmd.id === 'ads:disable') return !hasSubscription && adsEnabled
       return true
     })
-  }, [inputValue]) // Re-evaluate when input changes (user may have just toggled)
+  }, [inputValue, loadedSkills, hasSubscription]) // Re-evaluate when input changes (user may have just toggled)
 
   const {
     slashContext,
@@ -248,7 +289,12 @@ export const Chat = ({
       })
     }
     prevSlashActiveRef.current = slashContext.active
-  }, [slashContext.active, slashContext.query, slashMatches.length, inputValue.length])
+  }, [
+    slashContext.active,
+    slashContext.query,
+    slashMatches.length,
+    inputValue.length,
+  ])
 
   // Reset suggestion menu indexes when context changes
   useEffect(() => {
@@ -317,11 +363,8 @@ export const Chat = ({
     setForceFileOnlyMentions(true)
   }, [cursorPosition, inputValue, setInputValue])
 
-  const { saveToHistory, navigateUp, navigateDown } = useInputHistory(
-    inputValue,
-    setInputValue,
-    { inputMode, setInputMode },
-  )
+  const { saveToHistory, navigateUp, navigateDown, resetHistoryNavigation } =
+    useInputHistory(inputValue, setInputValue, { inputMode, setInputMode })
 
   // Use extracted streaming hook for connection, timer, queue, and exit handling
   const {
@@ -419,6 +462,7 @@ export const Chat = ({
     resumeQueue,
     continueChat,
     continueChatId,
+    subscriptionData,
   })
 
   sendMessageRef.current = sendMessage
@@ -490,12 +534,40 @@ export const Chat = ({
         }
 
         // Restore attachments if they were preserved and none have been added since
-        if (preservedAttachments && useChatStore.getState().pendingAttachments.length === 0) {
+        if (
+          preservedAttachments &&
+          useChatStore.getState().pendingAttachments.length === 0
+        ) {
           useChatStore.setState((state) => {
             state.pendingAttachments = preservedAttachments
           })
         }
       }
+    },
+  )
+
+  // Retire onboarding suggested prompts once the user submits anything
+  // (typed or clicked), persisting so they don't return on future launches.
+  useEffect(() => {
+    if (showSuggestedPrompts && messages.length > 0) {
+      markFirstPromptSubmitted()
+      setShowSuggestedPrompts(false)
+    }
+  }, [showSuggestedPrompts, messages.length])
+
+  // Submit a suggested onboarding prompt as if the user had typed and sent it
+  const handleSelectSuggestedPrompt = useEvent(
+    (prompt: string, selection: SuggestedPromptSelection) => {
+      trackEvent(AnalyticsEvent.SUGGESTED_PROMPT_CLICKED, {
+        label: selection.label,
+        index: selection.index,
+        promptLength: prompt.length,
+        agentMode,
+      })
+      onSubmitPrompt(prompt, agentMode).catch((error) => {
+        logger.error({ error }, '[suggested-prompt] Failed to submit prompt')
+        showClipboardMessage('Failed to send prompt', { durationMs: 3000 })
+      })
     },
   )
 
@@ -539,6 +611,7 @@ export const Chat = ({
             { error },
             '[followup-click] onSubmitPrompt failed with error',
           )
+          showClipboardMessage('Failed to send followup', { durationMs: 3000 })
         })
     }
 
@@ -561,7 +634,7 @@ export const Chat = ({
       if (index < agentMatches.length) {
         const selected = agentMatches[index]
         if (!selected) return
-        replacement = `@${selected.displayName} `
+        replacement = `@${selected.id} `
       } else {
         const fileIndex = index - agentMatches.length
         const selectedFile = fileMatches[fileIndex]
@@ -589,19 +662,21 @@ export const Chat = ({
     ],
   )
 
-  const { inputWidth, handleBuildFast, handleBuildMax } = useChatInput({
-    setInputValue,
-    agentMode,
-    setAgentMode,
-    separatorWidth,
-    initialPrompt,
-    onSubmitPrompt,
-    isCompactHeight,
-    isNarrowWidth,
-  })
+  const { inputWidth, handleBuildFast, handleBuildMax, handleBuildLite } =
+    useChatInput({
+      setInputValue,
+      agentMode,
+      setAgentMode,
+      separatorWidth,
+      initialPrompt,
+      onSubmitPrompt,
+      isCompactHeight,
+      isNarrowWidth,
+    })
 
   const {
     feedbackMode,
+    feedbackText,
     openFeedbackForMessage,
     closeFeedback,
     saveCurrentInput,
@@ -610,6 +685,7 @@ export const Chat = ({
   } = useFeedbackStore(
     useShallow((state) => ({
       feedbackMode: state.feedbackMode,
+      feedbackText: state.feedbackText,
       openFeedbackForMessage: state.openFeedbackForMessage,
       closeFeedback: state.closeFeedback,
       saveCurrentInput: state.saveCurrentInput,
@@ -627,6 +703,13 @@ export const Chat = ({
         preSelectAgents: state.preSelectAgents,
       })),
     )
+
+  const { reviewMode, closeReviewScreen } = useReviewStore(
+    useShallow((state) => ({
+      reviewMode: state.reviewMode,
+      closeReviewScreen: state.closeReviewScreen,
+    })),
+  )
 
   const publishMutation = usePublishMutation()
 
@@ -659,6 +742,10 @@ export const Chat = ({
       if (result.openChatHistory) {
         useChatHistoryStore.getState().openChatHistory()
       }
+
+      if (result.openReviewScreen) {
+        useReviewStore.getState().openReviewScreen()
+      }
     },
     [
       saveCurrentInput,
@@ -668,11 +755,35 @@ export const Chat = ({
     ],
   )
 
-  // Click handler for slash menu items - executes command immediately
+  // Helper to apply insertText for slash commands - returns true if handled
+  const applySlashInsertText = useCallback(
+    (selected: MatchedSlashCommand): boolean => {
+      if (selected.insertText != null && slashContext.startIndex >= 0) {
+        const before = inputValue.slice(0, slashContext.startIndex)
+        const after = inputValue.slice(
+          slashContext.startIndex + 1 + slashContext.query.length,
+        )
+        setInputValue({
+          text: before + selected.insertText + after,
+          cursorPosition: before.length + selected.insertText.length,
+          lastEditDueToNav: false,
+        })
+        setSlashSelectedIndex(0)
+        return true
+      }
+      return false
+    },
+    [slashContext, inputValue, setInputValue, setSlashSelectedIndex],
+  )
+
+  // Click handler for slash menu items - executes command or inserts text
   const handleSlashItemClick = useCallback(
     async (index: number) => {
       const selected = slashMatches[index]
       if (!selected) return
+
+      // If the command has insertText, insert it instead of executing
+      if (applySlashInsertText(selected)) return
 
       // Execute the selected slash command immediately
       const commandString = `/${selected.id}`
@@ -683,6 +794,7 @@ export const Chat = ({
     },
     [
       slashMatches,
+      applySlashInsertText,
       setSlashSelectedIndex,
       onSubmitPrompt,
       agentMode,
@@ -714,7 +826,7 @@ export const Chat = ({
     (
       id: string | null,
       options?: {
-        category?: string
+        category?: FeedbackCategory
         footerMessage?: string
         errors?: Array<{ id: string; message: string }>
       },
@@ -729,7 +841,7 @@ export const Chat = ({
     (
       id: string,
       options?: {
-        category?: string
+        category?: FeedbackCategory
         footerMessage?: string
         errors?: Array<{ id: string; message: string }>
       },
@@ -747,7 +859,13 @@ export const Chat = ({
       lastEditDueToNav: false,
     })
     setInputFocused(true)
-  }, [restoreSavedInput, setInputValue, setInputFocused])
+    resetHistoryNavigation()
+  }, [
+    restoreSavedInput,
+    setInputValue,
+    setInputFocused,
+    resetHistoryNavigation,
+  ])
 
   const handleCloseFeedback = useCallback(() => {
     closeFeedback()
@@ -758,6 +876,40 @@ export const Chat = ({
     closePublish()
     setInputFocused(true)
   }, [closePublish, setInputFocused])
+
+  const handleReviewOptionSelect = useCallback(
+    (reviewText: string) => {
+      closeReviewScreen()
+      setInputFocused(true)
+      // Submit the review request
+      onSubmitPrompt(reviewText, agentMode)
+        .then((result) => handleCommandResult(result))
+        .catch((error) => {
+          logger.error({ error }, '[review] Failed to submit review prompt')
+          showClipboardMessage('Failed to send review request', {
+            durationMs: 3000,
+          })
+        })
+    },
+    [
+      closeReviewScreen,
+      setInputFocused,
+      onSubmitPrompt,
+      agentMode,
+      handleCommandResult,
+    ],
+  )
+
+  const handleCloseReviewScreen = useCallback(() => {
+    closeReviewScreen()
+    setInputFocused(true)
+  }, [closeReviewScreen, setInputFocused])
+
+  const handleReviewCustom = useCallback(() => {
+    closeReviewScreen()
+    setInputMode('review')
+    setInputFocused(true)
+  }, [closeReviewScreen, setInputMode, setInputFocused])
 
   const handlePublish = useCallback(
     async (agentIds: string[]) => {
@@ -780,6 +932,10 @@ export const Chat = ({
   const handleSubmit = useCallback(async () => {
     // Report activity for ad rotation
     reportActivity()
+    // Update terminal title with truncated user input
+    if (inputValue.trim()) {
+      setTerminalTitle(inputValue)
+    }
     const result = await onSubmitPrompt(inputValue, agentMode)
     handleCommandResult(result)
   }, [onSubmitPrompt, inputValue, agentMode, handleCommandResult])
@@ -805,7 +961,7 @@ export const Chat = ({
     () => ({
       ...createDefaultChatKeyboardState(),
       inputMode,
-      inputValue,
+      inputValue: feedbackMode ? feedbackText : inputValue,
       cursorPosition,
       isStreaming,
       isWaitingForResponse,
@@ -828,6 +984,7 @@ export const Chat = ({
     [
       inputMode,
       inputValue,
+      feedbackText,
       cursorPosition,
       isStreaming,
       isWaitingForResponse,
@@ -856,7 +1013,6 @@ export const Chat = ({
       onClearFeedbackInput: () => {
         setFeedbackText('')
         useFeedbackStore.getState().setFeedbackCursor(0)
-        useFeedbackStore.getState().setFeedbackCategory('other')
       },
       onClearInput: () =>
         setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false }),
@@ -882,6 +1038,9 @@ export const Chat = ({
         const selected = slashMatches[slashSelectedIndex] || slashMatches[0]
         if (!selected) return
 
+        // If the command has insertText, insert it instead of executing
+        if (applySlashInsertText(selected)) return
+
         // Execute the selected slash command immediately
         const commandString = `/${selected.id}`
         setSlashSelectedIndex(0)
@@ -894,6 +1053,10 @@ export const Chat = ({
         // Complete the word without executing - same as clicking on the item
         const selected = slashMatches[slashSelectedIndex] || slashMatches[0]
         if (!selected || slashContext.startIndex < 0) return
+
+        // If the command has insertText, insert it instead of the command
+        if (applySlashInsertText(selected)) return
+
         const before = inputValue.slice(0, slashContext.startIndex)
         const after = inputValue.slice(
           slashContext.startIndex + 1 + slashContext.query.length,
@@ -926,7 +1089,7 @@ export const Chat = ({
           if (index < agentMatches.length) {
             const selected = agentMatches[index]
             if (!selected) return false
-            replacement = `@${selected.displayName} `
+            replacement = `@${selected.id} `
           } else {
             const fileIndex = index - agentMatches.length
             const selectedFile = fileMatches[fileIndex]
@@ -956,12 +1119,18 @@ export const Chat = ({
         let replacement: string
         const index = agentSelectedIndex
         if (index < agentMatches.length) {
-          const selected = agentMatches[index] || agentMatches[0]
+          const selected =
+            agentMatches.length > 0
+              ? agentMatches[index] || agentMatches[0]
+              : undefined
           if (!selected) return
-          replacement = `@${selected.displayName} `
+          replacement = `@${selected.id} `
         } else {
           const fileIndex = index - agentMatches.length
-          const selectedFile = fileMatches[fileIndex] || fileMatches[0]
+          const selectedFile =
+            fileMatches.length > 0
+              ? fileMatches[fileIndex] || fileMatches[0]
+              : undefined
           if (!selectedFile) return
           replacement = `@${selectedFile.filePath} `
         }
@@ -1019,12 +1188,23 @@ export const Chat = ({
           }
 
           const cwd = getProjectRoot() ?? process.cwd()
-          void addPendingImageFromFile(result.imagePath, cwd, placeholderPath)
+          addPendingImageFromFile(result.imagePath, cwd, placeholderPath).catch(
+            (error) => {
+              logger.error({ error }, 'Failed to add pending image from file')
+              showClipboardMessage('Failed to add image', { durationMs: 3000 })
+            },
+          )
         }, 0)
       },
       onPasteImagePath: (imagePath: string) => {
         const cwd = getProjectRoot() ?? process.cwd()
-        void validateAndAddImage(imagePath, cwd)
+        validateAndAddImage(imagePath, cwd).catch((error) => {
+          logger.error({ error, imagePath }, 'Failed to validate and add image')
+          showClipboardMessage('Failed to add image', { durationMs: 3000 })
+        })
+      },
+      onPasteFilePath: (filePath: string, isDirectory: boolean) => {
+        addPendingFileFromPath(filePath, isDirectory)
       },
       onPasteText: (text: string) => {
         setInputValue((prev) => {
@@ -1039,6 +1219,7 @@ export const Chat = ({
       },
       onScrollUp: scrollUp,
       onScrollDown: scrollDown,
+      onToggleAll: handleToggleAll,
       onOpenBuyCredits: () => {
         // If credits have been restored, just return to default mode
         if (areCreditsRestored()) {
@@ -1046,7 +1227,7 @@ export const Chat = ({
           return
         }
         // Otherwise open the buy credits page
-        open(WEBSITE_URL + '/usage')
+        safeOpen(WEBSITE_URL + '/usage')
       },
     }),
     [
@@ -1060,6 +1241,9 @@ export const Chat = ({
       setSlashSelectedIndex,
       slashMatches,
       slashSelectedIndex,
+      slashContext,
+      inputValue,
+      applySlashInsertText,
       onSubmitPrompt,
       agentMode,
       handleCommandResult,
@@ -1080,6 +1264,7 @@ export const Chat = ({
       clearQueue,
       scrollUp,
       scrollDown,
+      handleToggleAll,
     ],
   )
 
@@ -1087,7 +1272,7 @@ export const Chat = ({
   useChatKeyboard({
     state: chatKeyboardState,
     handlers: chatKeyboardHandlers,
-    disabled: askUserState !== null,
+    disabled: askUserState !== null || reviewMode,
   })
 
   // Sync message block context to zustand store for child components
@@ -1125,6 +1310,7 @@ export const Chat = ({
       onToggleCollapsed: handleCollapseToggle,
       onBuildFast: handleBuildFast,
       onBuildMax: handleBuildMax,
+      onBuildLite: handleBuildLite,
       onFeedback: handleMessageFeedback,
       onCloseFeedback: handleCloseFeedback,
     })
@@ -1132,6 +1318,7 @@ export const Chat = ({
     handleCollapseToggle,
     handleBuildFast,
     handleBuildMax,
+    handleBuildLite,
     handleMessageFeedback,
     handleCloseFeedback,
     setMessageBlockCallbacks,
@@ -1147,6 +1334,36 @@ export const Chat = ({
     mentionContext.active &&
     (agentSuggestionItems.length > 0 || fileSuggestionItems.length > 0)
   const hasSuggestionMenu = hasSlashSuggestions || hasMentionSuggestions
+
+  // Show first-time onboarding starter prompts only on a pristine, idle,
+  // empty-input default-mode chat — and never while a menu/overlay is up.
+  const showOnboardingPrompts =
+    showSuggestedPrompts &&
+    messages.length === 0 &&
+    inputValue.length === 0 &&
+    inputMode === 'default' &&
+    !hasSuggestionMenu &&
+    !isStreaming &&
+    !isWaitingForResponse &&
+    !feedbackMode &&
+    !publishMode &&
+    !reviewMode &&
+    askUserState === null
+
+  // Fire a one-time impression so we can measure onboarding-prompt usage
+  // (click-through = SUGGESTED_PROMPT_CLICKED / SUGGESTED_PROMPT_SHOWN).
+  const suggestedPromptsShownRef = useRef(false)
+  useEffect(() => {
+    if (showOnboardingPrompts && !suggestedPromptsShownRef.current) {
+      suggestedPromptsShownRef.current = true
+      trackEvent(AnalyticsEvent.SUGGESTED_PROMPT_SHOWN, {
+        count: isCompactHeight
+          ? Math.min(2, DEFAULT_SUGGESTED_PROMPTS.length)
+          : DEFAULT_SUGGESTED_PROMPTS.length,
+        isCompactHeight,
+      })
+    }
+  }, [showOnboardingPrompts, isCompactHeight])
 
   const inputLayoutMetrics = useMemo(() => {
     // In bash mode, layout is based on the actual input (no ! prefix needed)
@@ -1182,13 +1399,27 @@ export const Chat = ({
   })
   const hasStatusIndicatorContent = statusIndicatorState.kind !== 'idle'
 
-  const isClaudeOAuthActive = getClaudeOAuthStatus().connected
-
-  // Fetch Claude quota when OAuth is active
-  const { data: claudeQuota } = useClaudeQuotaQuery({
-    enabled: isClaudeOAuthActive,
-    refetchInterval: 60 * 1000, // Refetch every 60 seconds
-  })
+  // Auto-show subscription limit banner when rate limit becomes active
+  const subscriptionLimitShownRef = useRef(false)
+  const subscriptionRateLimit = subscriptionData?.hasSubscription
+    ? subscriptionData.rateLimit
+    : undefined
+  const fallbackToALaCarte = subscriptionData?.fallbackToALaCarte ?? false
+  useEffect(() => {
+    const isLimited = subscriptionRateLimit?.limited === true
+    if (isLimited && !subscriptionLimitShownRef.current) {
+      subscriptionLimitShownRef.current = true
+      // Skip showing the banner if user prefers to always fall back to a-la-carte
+      if (!fallbackToALaCarte) {
+        useChatStore.getState().setInputMode('subscriptionLimit')
+      }
+    } else if (!isLimited) {
+      subscriptionLimitShownRef.current = false
+      if (useChatStore.getState().inputMode === 'subscriptionLimit') {
+        useChatStore.getState().setInputMode('default')
+      }
+    }
+  }, [subscriptionRateLimit?.limited, fallbackToALaCarte])
 
   const inputBoxTitle = useMemo(() => {
     const segments: string[] = []
@@ -1206,12 +1437,16 @@ export const Chat = ({
     return ` ${segments.join('   ')} `
   }, [queuePreviewTitle, pausedQueueText])
 
+  const hasActiveFreebuffSession =
+    IS_FREEBUFF && freebuffSession?.status === 'active'
+  const isFreebuffSessionOver =
+    IS_FREEBUFF && freebuffSession?.status === 'ended'
   const shouldShowStatusLine =
     !feedbackMode &&
-    (hasStatusIndicatorContent || shouldShowQueuePreview || !isAtBottom)
-
-  // Determine if Claude is actively streaming/waiting
-  const isClaudeActive = isStreaming || isWaitingForResponse
+    (hasStatusIndicatorContent ||
+      shouldShowQueuePreview ||
+      !isAtBottom ||
+      hasActiveFreebuffSession)
 
   // Track mouse movement for ad activity (throttled)
   const lastMouseActivityRef = useRef<number>(0)
@@ -1275,6 +1510,9 @@ export const Chat = ({
         <TopBanner gitRoot={gitRoot} onSwitchToGitRoot={onSwitchToGitRoot} />
 
         {headerContent}
+        {IS_FREEBUFF && (
+          <FreebuffActiveSessionSummary session={freebuffSession} />
+        )}
         {hiddenMessageCount > 0 && (
           <LoadPreviousButton
             hiddenCount={hiddenMessageCount}
@@ -1307,81 +1545,118 @@ export const Chat = ({
           backgroundColor: 'transparent',
         }}
       >
+        {showOnboardingPrompts && !reviewMode && !isFreebuffSessionOver && (
+          <SuggestedPrompts
+            onSelect={handleSelectSuggestedPrompt}
+            maxItems={isCompactHeight ? 2 : undefined}
+          />
+        )}
+
         {shouldShowStatusLine && (
           <StatusBar
             timerStartTime={timerStartTime}
             isAtBottom={isAtBottom}
             scrollToLatest={scrollToLatest}
             statusIndicatorState={statusIndicatorState}
+            onStop={chatKeyboardHandlers.onInterruptStream}
+            onEndSession={() => {
+              setMessages((prev) => [
+                ...prev,
+                getSystemMessage(END_SESSION_MESSAGE),
+              ])
+              returnToFreebuffLanding({ resetChat: true }).catch(() => {})
+            }}
+            freebuffSession={freebuffSession}
           />
         )}
 
-        {ad && getAdsEnabled() && <AdBanner ad={ad} />}
+        {ads?.[0] && (IS_FREEBUFF || getAdsEnabled()) && (
+          <SingleAdBanner
+            ad={ads[0]}
+            onClick={recordClick}
+            onImpression={recordImpression}
+          />
+        )}
 
-        <ChatInputBar
-          inputValue={inputValue}
-          cursorPosition={cursorPosition}
-          setInputValue={setInputValue}
-          inputFocused={inputFocused}
-          inputRef={inputRef}
-          inputPlaceholder={inputPlaceholder}
-          lastEditDueToNav={lastEditDueToNav}
-          agentMode={agentMode}
-          toggleAgentMode={toggleAgentMode}
-          setAgentMode={setAgentMode}
-          hasSlashSuggestions={hasSlashSuggestions}
-          hasMentionSuggestions={hasMentionSuggestions}
-          hasSuggestionMenu={hasSuggestionMenu}
-          slashSuggestionItems={slashSuggestionItems}
-          agentSuggestionItems={agentSuggestionItems}
-          fileSuggestionItems={fileSuggestionItems}
-          slashSelectedIndex={slashSelectedIndex}
-          agentSelectedIndex={agentSelectedIndex}
-          onSlashItemClick={handleSlashItemClick}
-          onMentionItemClick={handleMentionItemClick}
-          theme={theme}
-          terminalHeight={terminalHeight}
-          separatorWidth={separatorWidth}
-          shouldCenterInputVertically={shouldCenterInputVertically}
-          inputBoxTitle={inputBoxTitle}
-          isCompactHeight={isCompactHeight}
-          isNarrowWidth={isNarrowWidth}
-          feedbackMode={feedbackMode}
-          handleExitFeedback={handleExitFeedback}
-          publishMode={publishMode}
-          handleExitPublish={handleExitPublish}
-          handlePublish={handlePublish}
-          handleSubmit={handleSubmit}
-          onPaste={createPasteHandler({
-            text: inputValue,
-            cursorPosition,
-            onChange: setInputValue,
-            onPasteImage: chatKeyboardHandlers.onPasteImage,
-            onPasteImagePath: chatKeyboardHandlers.onPasteImagePath,
-            onPasteLongText: (pastedText) => {
-              const id = crypto.randomUUID()
-              const preview = pastedText.slice(0, 100).replace(/\n/g, ' ')
-              useChatStore.getState().addPendingTextAttachment({
-                id,
-                content: pastedText,
-                preview,
-                charCount: pastedText.length,
-              })
-              // Show temporary status message
-              showClipboardMessage(
-                `📋 Pasted text (${pastedText.length.toLocaleString()} chars)`,
-                { durationMs: 5000 },
-              )
-            },
-            cwd: getProjectRoot() ?? process.cwd(),
-          })}
-        />
-
-        <BottomStatusLine
-          isClaudeConnected={isClaudeOAuthActive}
-          isClaudeActive={isClaudeActive}
-          claudeQuota={claudeQuota}
-        />
+        {reviewMode ? (
+          // Review and ask_user take precedence over the session-ended banner:
+          // during the grace window the agent may still be asking to run tools
+          // or asking the user a question, and those approvals/answers must be
+          // reachable for the run to finish — otherwise the agent hangs
+          // waiting for input that can never be given.
+          <ReviewScreen
+            onSelectOption={handleReviewOptionSelect}
+            onCustom={handleReviewCustom}
+            onCancel={handleCloseReviewScreen}
+          />
+        ) : isFreebuffSessionOver && !askUserState ? (
+          <SessionEndedBanner
+            isStreaming={isStreaming || isWaitingForResponse}
+          />
+        ) : (
+          <>
+            <ChatInputBar
+              inputValue={inputValue}
+              cursorPosition={cursorPosition}
+              setInputValue={setInputValue}
+              inputFocused={inputFocused}
+              inputRef={inputRef}
+              inputPlaceholder={inputPlaceholder}
+              lastEditDueToNav={lastEditDueToNav}
+              agentMode={agentMode}
+              toggleAgentMode={toggleAgentMode}
+              setAgentMode={setAgentMode}
+              hasSlashSuggestions={hasSlashSuggestions}
+              hasMentionSuggestions={hasMentionSuggestions}
+              hasSuggestionMenu={hasSuggestionMenu}
+              slashSuggestionItems={slashSuggestionItems}
+              agentSuggestionItems={agentSuggestionItems}
+              fileSuggestionItems={fileSuggestionItems}
+              slashSelectedIndex={slashSelectedIndex}
+              agentSelectedIndex={agentSelectedIndex}
+              onSlashItemClick={handleSlashItemClick}
+              onMentionItemClick={handleMentionItemClick}
+              theme={theme}
+              terminalHeight={terminalHeight}
+              separatorWidth={separatorWidth}
+              shouldCenterInputVertically={shouldCenterInputVertically}
+              inputBoxTitle={inputBoxTitle}
+              isCompactHeight={isCompactHeight}
+              isNarrowWidth={isNarrowWidth}
+              feedbackMode={feedbackMode}
+              handleExitFeedback={handleExitFeedback}
+              publishMode={publishMode}
+              handleExitPublish={handleExitPublish}
+              handlePublish={handlePublish}
+              handleSubmit={handleSubmit}
+              onPaste={createPasteHandler({
+                text: inputValue,
+                cursorPosition,
+                onChange: setInputValue,
+                onPasteImage: chatKeyboardHandlers.onPasteImage,
+                onPasteImagePath: chatKeyboardHandlers.onPasteImagePath,
+                onPasteFilePath: chatKeyboardHandlers.onPasteFilePath,
+                onPasteLongText: (pastedText) => {
+                  const id = crypto.randomUUID()
+                  const preview = pastedText.slice(0, 100).replace(/\n/g, ' ')
+                  useChatStore.getState().addPendingTextAttachment({
+                    id,
+                    content: pastedText,
+                    preview,
+                    charCount: pastedText.length,
+                  })
+                  // Show temporary status message
+                  showClipboardMessage(
+                    `📋 Pasted text (${pastedText.length.toLocaleString()} chars)`,
+                    { durationMs: 5000 },
+                  )
+                },
+                cwd: getProjectRoot() ?? process.cwd(),
+              })}
+              onInterruptStream={chatKeyboardHandlers.onInterruptStream}
+            />
+          </>
+        )}
       </box>
     </box>
   )

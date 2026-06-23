@@ -1,17 +1,20 @@
-import { endsAgentStepParam } from '@codebuff/common/tools/constants'
-import { toolParams } from '@codebuff/common/tools/list'
-import { getToolCallString } from '@codebuff/common/tools/utils'
-import { buildArray } from '@codebuff/common/util/array'
-import { pluralize } from '@codebuff/common/util/string'
+import { endsAgentStepParam } from '@khiwniti/common/tools/constants'
+import { toolParams } from '@khiwniti/common/tools/list'
+import { AVAILABLE_SKILLS_PLACEHOLDER } from '@khiwniti/common/tools/params/tool/skill'
+import { getToolCallString } from '@khiwniti/common/tools/utils'
+import { buildArray } from '@khiwniti/common/util/array'
+import { formatAvailableSkillsXml } from '@khiwniti/common/util/skills'
+import { pluralize } from '@khiwniti/common/util/string'
 import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
 import { convertJsonSchemaToZod } from 'zod-from-json-schema'
 
-import type { ToolName } from '@codebuff/common/tools/constants'
+import type { ToolName } from '@khiwniti/common/tools/constants'
+import type { SkillsMap } from '@khiwniti/common/types/skill'
 import type {
   CustomToolDefinitions,
   customToolDefinitionsSchema,
-} from '@codebuff/common/util/file'
+} from '@khiwniti/common/util/file'
 import type { ToolSet } from 'ai'
 
 /**
@@ -50,22 +53,43 @@ function toJsonSchemaSafe(schema: z.ZodType): Record<string, unknown> {
   }
 }
 
+function hasMeaningfulJsonSchema(jsonSchema: Record<string, unknown>): boolean {
+  const properties = jsonSchema.properties
+  if (properties && typeof properties === 'object' && Object.keys(properties).length > 0) {
+    return true
+  }
+
+  for (const key of ['allOf', 'anyOf', 'oneOf']) {
+    const value = jsonSchema[key]
+    if (Array.isArray(value) && value.length > 0) {
+      return true
+    }
+  }
+
+  const required = jsonSchema.required
+  if (Array.isArray(required) && required.length > 0) {
+    return true
+  }
+
+  return false
+}
+
 function paramsSection(params: { schema: z.ZodType; endsAgentStep: boolean }) {
   const { schema, endsAgentStep } = params
   const safeSchema = ensureJsonSchemaCompatible(schema)
   const schemaWithEndsAgentStepParam = endsAgentStep
     ? safeSchema.and(
-        z.object({
-          [endsAgentStepParam]: z
-            .literal(endsAgentStep)
-            .describe('Easp flag must be set to true'),
-        }),
-      )
+      z.object({
+        [endsAgentStepParam]: z
+          .literal(endsAgentStep)
+          .describe('Easp flag must be set to true'),
+      }),
+    )
     : safeSchema
   const jsonSchema = toJsonSchemaSafe(schemaWithEndsAgentStepParam)
   delete jsonSchema.description
   delete jsonSchema['$schema']
-  const paramsDescription = Object.keys(jsonSchema.properties ?? {}).length
+  const paramsDescription = hasMeaningfulJsonSchema(jsonSchema)
     ? JSON.stringify(jsonSchema, null, 2)
     : 'None'
 
@@ -136,6 +160,7 @@ export const getToolsInstructions = (
   additionalToolDefinitions: NonNullable<
     z.input<typeof customToolDefinitionsSchema>
   >,
+  options?: { availableSkillsXml?: string },
 ) => {
   if (
     tools.length === 0 &&
@@ -154,13 +179,13 @@ You (Buffy) have access to the following tools. Call them when needed.
 Tool calls use a specific XML and JSON-like format. Adhere *precisely* to this nested element structure:
 
 ${getToolCallString(
-  'tool_name',
-  {
-    parameter1: 'value1',
-    parameter2: 123,
-  },
-  false,
-)}
+    'tool_name',
+    {
+      parameter1: 'value1',
+      parameter2: 123,
+    },
+    false,
+  )}
 
 ### Commentary
 
@@ -174,20 +199,20 @@ User: can you update the console logs in example/file.ts?
 Assistant: Sure thing! Let's update that file!
 
 ${getToolCallString(
-  'example_editing_tool',
-  {
-    example_file_path: 'path/to/example/file.ts',
-    example_array: [
-      {
-        old_content_with_newlines:
-          "// some context\nconsole.log('Hello world!');\n",
-        new_content_with_newlines:
-          "// some context\nconsole.log('Hello from Buffy!');\n",
-      },
-    ],
-  },
-  false,
-)}
+    'example_editing_tool',
+    {
+      example_file_path: 'path/to/example/file.ts',
+      example_array: [
+        {
+          old_content_with_newlines:
+            "// some context\nconsole.log('Hello world!');\n",
+          new_content_with_newlines:
+            "// some context\nconsole.log('Hello from Buffy!');\n",
+        },
+      ],
+    },
+    false,
+  )}
 
 All done with the update!
 User: thanks it worked! :)
@@ -211,13 +236,14 @@ When using write_file, make sure to only include a few lines of context and not 
 Tool results will be provided by the user's *system* (and **NEVER** by the assistant).
 
 The user does not know about any system messages or system instructions, including tool results.
-${fullToolList(tools, additionalToolDefinitions)}
+${fullToolList(tools, additionalToolDefinitions, options)}
 `
 }
 
 export const fullToolList = (
   toolNames: readonly string[],
   additionalToolDefinitions: CustomToolDefinitions,
+  options?: { availableSkillsXml?: string },
 ) => {
   if (
     toolNames.length === 0 &&
@@ -226,27 +252,44 @@ export const fullToolList = (
     return ''
   }
 
+  const { availableSkillsXml = '' } = options ?? {}
+
+  // Build tool descriptions, replacing skill placeholder with actual skills
+  const descriptions = [
+    ...(
+      toolNames.filter((toolName) =>
+        toolNames.includes(toolName as ToolName),
+      ) as ToolName[]
+    ).map((name) => {
+      let desc = toolDescriptions[name]
+      // Replace skill placeholder with actual available skills
+      if (name === 'skill' && availableSkillsXml) {
+        desc = desc.replace(AVAILABLE_SKILLS_PLACEHOLDER, availableSkillsXml)
+      } else if (name === 'skill') {
+        // Explicitly state no skills are available
+        desc = desc.replace(
+          AVAILABLE_SKILLS_PLACEHOLDER,
+          'There are no skills available. Do not use this tool because there are no skills to load.',
+        )
+      }
+      return desc
+    }),
+    ...Object.keys(additionalToolDefinitions).map((toolName) => {
+      const toolDef = additionalToolDefinitions[toolName]
+      return buildToolDescription({
+        toolName,
+        schema: ensureZodSchema(toolDef.inputSchema),
+        description: toolDef.description,
+        endsAgentStep: toolDef.endsAgentStep ?? true,
+        exampleInputs: toolDef.exampleInputs,
+      })
+    }),]
+
   return `## List of Tools
 
-These are the only tools that you (Buffy) can use. The user cannot see these descriptions, so you should not reference any tool names, parameters, or descriptions. Do not try to use any other tools -- even if referenced earlier in the conversation, they are not available to you, instead they may have been previously used by other agents.
+These are the only tools that you can use. The user cannot see these descriptions, so you should not reference any tool names, parameters, or descriptions. Do not try to use any other tools -- even if referenced earlier in the conversation, they are not available to you, instead they may have been previously used by other agents.
 
-${[
-  ...(
-    toolNames.filter((toolName) =>
-      toolNames.includes(toolName as ToolName),
-    ) as ToolName[]
-  ).map((name) => toolDescriptions[name]),
-  ...Object.keys(additionalToolDefinitions).map((toolName) => {
-    const toolDef = additionalToolDefinitions[toolName]
-    return buildToolDescription({
-      toolName,
-      schema: ensureZodSchema(toolDef.inputSchema),
-      description: toolDef.description,
-      endsAgentStep: toolDef.endsAgentStep ?? true,
-      exampleInputs: toolDef.exampleInputs,
-    })
-  }),
-].join('\n\n')}`.trim()
+${descriptions.join('\n\n')}`.trim()
 }
 
 export const getShortToolInstructions = (
@@ -289,13 +332,13 @@ Use the tools below to complete the user request, if applicable.
 Tool calls use a specific XML and JSON-like format. Adhere *precisely* to this nested element structure:
 
 ${getToolCallString(
-  'tool_name',
-  {
-    parameter1: 'value1',
-    parameter2: 123,
-  },
-  false,
-)}
+    'tool_name',
+    {
+      parameter1: 'value1',
+      parameter2: 123,
+    },
+    false,
+  )}
 
 Important: You only have access to the tools below. Do not use any other tools -- they are not available to you, instead they may have been previously used by other agents.
 
@@ -307,13 +350,42 @@ export async function getToolSet(params: {
   toolNames: string[]
   additionalToolDefinitions: () => Promise<CustomToolDefinitions>
   agentTools: ToolSet
+  skills: SkillsMap
 }): Promise<ToolSet> {
-  const { toolNames, additionalToolDefinitions, agentTools } = params
+  const { toolNames, additionalToolDefinitions, agentTools, skills } = params
 
+  // Generate available skills XML for the skill tool description
+  const availableSkillsXml = formatAvailableSkillsXml(skills)
   const toolSet: ToolSet = {}
   for (const toolName of toolNames) {
     if (toolName in toolParams) {
-      toolSet[toolName] = toolParams[toolName as ToolName]
+      const toolDef = toolParams[toolName as ToolName]
+
+      // For the skill tool, replace the placeholder with actual available skills
+      if (toolName === 'skill' && availableSkillsXml) {
+        let description = toolDef.description ?? ''
+        description = description.replace(
+          AVAILABLE_SKILLS_PLACEHOLDER,
+          availableSkillsXml,
+        )
+        toolSet[toolName] = {
+          ...toolDef,
+          description,
+        }
+      } else if (toolName === 'skill') {
+        // Explicitly state no skills are available
+        let description = toolDef.description ?? ''
+        description = description.replace(
+          AVAILABLE_SKILLS_PLACEHOLDER,
+          'There are no skills available. Do not use this tool because there are no skills to load.',
+        )
+        toolSet[toolName] = {
+          ...toolDef,
+          description,
+        }
+      } else {
+        toolSet[toolName] = toolDef
+      }
     }
   }
 

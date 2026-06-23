@@ -6,9 +6,13 @@ export const ALLOWED_MODEL_PREFIXES = [
   'openai',
   'google',
   'x-ai',
+  'deepseek',
+  'minimax',
+  'mimo',
 ] as const
 
 export const costModes = [
+  'free',
   'lite',
   'normal',
   'max',
@@ -51,11 +55,42 @@ export const openrouterModels = {
 export type openrouterModel =
   (typeof openrouterModels)[keyof typeof openrouterModels]
 
+export const openCodeZenModels = {
+  opencode_kimi_k2_6: 'opencode/kimi-k2.6',
+  opencode_minimax_m2_7: 'opencode/minimax-m2.7',
+} as const
+export type OpenCodeZenModel =
+  (typeof openCodeZenModels)[keyof typeof openCodeZenModels]
+
 export const deepseekModels = {
   deepseekChat: 'deepseek-chat',
   deepseekReasoner: 'deepseek-reasoner',
+  deepseekV4ProDirect: 'deepseek-v4-pro',
+  deepseekV4Pro: 'deepseek/deepseek-v4-pro',
+  deepseekV4FlashDirect: 'deepseek-v4-flash',
+  deepseekV4Flash: 'deepseek/deepseek-v4-flash',
 } as const
 export type DeepseekModel = (typeof deepseekModels)[keyof typeof deepseekModels]
+
+export const mimoModels = {
+  mimoV25Direct: 'mimo-v2.5',
+  mimoV25: 'mimo/mimo-v2.5',
+  mimoV25ProDirect: 'mimo-v2.5-pro',
+  mimoV25Pro: 'mimo/mimo-v2.5-pro',
+} as const
+export type MimoModel = (typeof mimoModels)[keyof typeof mimoModels]
+
+export const minimaxModels = {
+  minimaxM3: 'minimax/minimax-m3',
+} as const
+export type MiniMaxModel = (typeof minimaxModels)[keyof typeof minimaxModels]
+
+export const moonshotModels = {
+  kimiK26: 'moonshotai/kimi-k2.6',
+  kimiK27Code: 'moonshotai/kimi-k2.7-code',
+} as const
+export type MoonshotModel =
+  (typeof moonshotModels)[keyof typeof moonshotModels]
 
 // Vertex uses "endpoint IDs" for finetuned models, which are just integers
 export const finetunedVertexModels = {
@@ -87,6 +122,8 @@ export type FinetunedVertexModel =
 export const models = {
   ...openaiModels,
   ...deepseekModels,
+  ...mimoModels,
+  ...minimaxModels,
   ...openrouterModels,
   ...finetunedVertexModels,
 } as const
@@ -124,15 +161,6 @@ export const providerModelNames = {
 
 export type Model = (typeof models)[keyof typeof models] | (string & {})
 
-export const shouldCacheModels = [
-  'anthropic/claude-opus-4.1',
-  'anthropic/claude-sonnet-4',
-  'anthropic/claude-opus-4',
-  'anthropic/claude-3.7-sonnet',
-  'anthropic/claude-3.5-haiku',
-  'z-ai/glm-4.5',
-  'qwen/qwen3-coder',
-]
 const nonCacheableModels = [
   models.openrouter_grok_4,
 ] satisfies string[] as string[]
@@ -148,6 +176,21 @@ export function supportsCacheControl(model: Model): boolean {
     return false
   }
   return !nonCacheableModels.includes(model)
+}
+
+/**
+ * Claude 4.6+ (including Fable) rejects requests whose final message is an
+ * assistant message ("This model does not support assistant message prefill"),
+ * e.g. when routed through Amazon Bedrock. Older Claude models and other
+ * providers accept a trailing assistant message as a prefill to continue from.
+ */
+export function supportsAssistantPrefill(model: Model): boolean {
+  const match = model.match(/claude-(?:[a-z]+-)?(\d+(?:[.-]\d+)?)/)
+  if (!match) {
+    return true
+  }
+  const version = parseFloat(match[1].replace('-', '.'))
+  return version < 4.6
 }
 
 export function getModelFromShortName(
@@ -170,6 +213,8 @@ export const providerDomains = {
   anthropic: 'anthropic.com',
   openai: 'chatgpt.com',
   deepseek: 'deepseek.com',
+  minimax: 'minimax.io',
+  mimo: 'xiaomi.com',
   xai: 'x.ai',
 } as const
 
@@ -180,44 +225,14 @@ export function getLogoForModel(modelName: string): string | undefined {
     domain = providerDomains.openai
   else if (Object.values(deepseekModels).includes(modelName as DeepseekModel))
     domain = providerDomains.deepseek
+  else if (Object.values(minimaxModels).includes(modelName as MiniMaxModel))
+    domain = providerDomains.minimax
+  else if (Object.values(mimoModels).includes(modelName as MimoModel))
+    domain = providerDomains.mimo
   else if (modelName.includes('claude')) domain = providerDomains.anthropic
   else if (modelName.includes('grok')) domain = providerDomains.xai
 
   return domain
     ? `https://www.google.com/s2/favicons?domain=${domain}&sz=256`
     : undefined
-}
-
-export const getModelForMode = (
-  costMode: CostMode,
-  operation: 'agent' | 'file-requests' | 'check-new-files',
-) => {
-  if (operation === 'agent') {
-    return {
-      lite: models.openrouter_gemini2_5_flash,
-      normal: models.openrouter_claude_sonnet_4,
-      max: models.openrouter_claude_sonnet_4,
-      experimental: models.openrouter_gemini2_5_pro_preview,
-      ask: models.openrouter_gemini2_5_pro_preview,
-    }[costMode]
-  }
-  if (operation === 'file-requests') {
-    return {
-      lite: models.openrouter_claude_3_5_haiku,
-      normal: models.openrouter_claude_3_5_haiku,
-      max: models.openrouter_claude_sonnet_4,
-      experimental: models.openrouter_claude_sonnet_4,
-      ask: models.openrouter_claude_3_5_haiku,
-    }[costMode]
-  }
-  if (operation === 'check-new-files') {
-    return {
-      lite: models.openrouter_claude_3_5_haiku,
-      normal: models.openrouter_claude_sonnet_4,
-      max: models.openrouter_claude_sonnet_4,
-      experimental: models.openrouter_claude_sonnet_4,
-      ask: models.openrouter_claude_sonnet_4,
-    }[costMode]
-  }
-  throw new Error(`Unknown operation: ${operation}`)
 }

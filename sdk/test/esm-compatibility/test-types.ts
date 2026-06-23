@@ -1,15 +1,17 @@
 // Test TypeScript type resolution in ESM environment
+import {
+  CodebuffClient as ClientClass,
+  getCustomToolDefinition,
+} from '@khiwniti/sdk'
+import * as FullSDK from '@khiwniti/sdk'
+;
+
 import type {
   CodebuffClient,
   CustomToolDefinition,
   RunState,
-} from '@codebuff/sdk'
-import {
-  CodebuffClient as ClientClass,
-  getCustomToolDefinition,
-} from '@codebuff/sdk'
-import * as FullSDK from '@codebuff/sdk'
-;(async () => {
+} from '@khiwniti/sdk'
+(async () => {
   // Test 1: Type imports work correctly
   const testClient: CodebuffClient = {} as any
   const testTool: CustomToolDefinition = {} as any
@@ -46,7 +48,7 @@ import * as FullSDK from '@codebuff/sdk'
   console.log('✅ Custom tool definition types work correctly')
 
   // Test 5: Dynamic imports also work in TypeScript ESM
-  const dynamicSDK = await import('@codebuff/sdk')
+  const dynamicSDK = await import('@khiwniti/sdk')
   const ClientFromDynamic: typeof ClientClass = dynamicSDK.CodebuffClient
   console.log('✅ Dynamic imports work in TypeScript ESM')
 

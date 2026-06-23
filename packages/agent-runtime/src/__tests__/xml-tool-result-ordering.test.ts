@@ -1,17 +1,20 @@
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { AnalyticsEvent } from '@khiwniti/common/constants/analytics-events'
+import { promptSuccess } from '@khiwniti/common/util/error'
 import { beforeEach, describe, expect, it } from 'bun:test'
 
 import { processStreamWithTools } from '../tool-stream-parser'
+import { createToolCallChunk } from './test-utils'
 
-import type { AgentRuntimeDeps } from '@codebuff/common/types/contracts/agent-runtime'
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
+import type { AgentRuntimeDeps } from '@khiwniti/common/types/contracts/agent-runtime'
+import type { StreamChunk } from '@khiwniti/common/types/contracts/llm'
 
 describe('XML tool result ordering', () => {
   async function* createMockStream(chunks: StreamChunk[]) {
     for (const chunk of chunks) {
       yield chunk
     }
-    return 'mock-message-id'
+    return promptSuccess('mock-message-id')
   }
 
   function textChunk(text: string): StreamChunk {
@@ -58,7 +61,6 @@ describe('XML tool result ordering', () => {
       stream,
       processors: {},
       defaultProcessor,
-      onError: () => {},
       onResponseChunk,
       executeXmlToolCall: async ({ toolName, input }) => {
         executionOrder.push(`executeXmlToolCall:${toolName}`)
@@ -135,7 +137,6 @@ describe('XML tool result ordering', () => {
       stream,
       processors: {},
       defaultProcessor,
-      onError: () => {},
       onResponseChunk,
       executeXmlToolCall: async ({ toolName }) => {
         // Simulate tool_call event
@@ -167,6 +168,44 @@ describe('XML tool result ordering', () => {
       const firstTextAfter = textAfterEvents[0]
       expect(toolResultEvent.order).toBeLessThan(firstTextAfter.order)
     }
+  })
+
+  it('tracks summarized tool use analytics without raw params or contents', async () => {
+    const trackedEvents: any[] = []
+
+    for await (const _chunk of processStreamWithTools({
+      ...agentRuntimeImpl,
+      stream: createMockStream([
+        createToolCallChunk('write_file', {
+          path: 'secret.ts',
+          content: 'private contents',
+        }),
+      ]),
+      processors: {},
+      defaultProcessor: () => ({ onTagStart: () => {}, onTagEnd: () => {} }),
+      onResponseChunk: () => {},
+      executeXmlToolCall: async () => {},
+      trackEvent: (event) => {
+        trackedEvents.push(event)
+      },
+    })) {
+      // Consume stream
+    }
+
+    const toolUse = trackedEvents.find(
+      (event) => event.event === AnalyticsEvent.TOOL_USE,
+    )
+    expect(toolUse).toBeDefined()
+    expect(toolUse.properties).toMatchObject({
+      toolName: 'write_file',
+      inputType: 'object',
+      inputKeyCount: 2,
+      inputKeys: ['path', 'content'],
+      hasContents: false,
+      contentsLength: 0,
+    })
+    expect(toolUse.properties.parsedParams).toBeUndefined()
+    expect(toolUse.properties.contents).toBeUndefined()
   })
 
   it('should not deadlock when executeXmlToolCall awaits tool execution', async () => {
@@ -205,7 +244,6 @@ describe('XML tool result ordering', () => {
         stream,
         processors: {},
         defaultProcessor: () => ({ onTagStart: () => {}, onTagEnd: () => {} }),
-        onError: () => {},
         onResponseChunk: () => {},
         executeXmlToolCall: async () => {
           // Simulate tool execution with async work

@@ -1,6 +1,8 @@
 export type GrantType =
   | 'free'
   | 'referral'
+  | 'referral_legacy'
+  | 'subscription'
   | 'purchase'
   | 'admin'
   | 'organization'
@@ -9,6 +11,8 @@ export type GrantType =
 export const GrantTypeValues = [
   'free',
   'referral',
+  'referral_legacy',
+  'subscription',
   'purchase',
   'admin',
   'organization',

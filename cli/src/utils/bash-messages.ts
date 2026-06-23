@@ -1,8 +1,8 @@
 import { formatTimestamp } from './helpers'
 
-import type { PendingBashMessage } from '../state/chat-store'
+import type { PendingBashMessage } from '../types/store'
 import type { ChatMessage, ContentBlock } from '../types/chat'
-import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
+import type { ToolResultOutput } from '@khiwniti/common/types/messages/content-part'
 
 export function createRunTerminalToolResult(params: {
   command: string

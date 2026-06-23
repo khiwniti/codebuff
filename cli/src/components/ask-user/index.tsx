@@ -8,7 +8,6 @@ import { TextAttributes } from '@opentui/core'
 import { useKeyboard } from '@opentui/react'
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 
-import type { KeyEvent } from '@opentui/core'
 
 import {
   AccordionQuestion,
@@ -17,10 +16,12 @@ import {
 import { getOptionLabel, KEYBOARD_HINTS, CUSTOM_OPTION_INDEX } from './constants'
 import { useTheme } from '../../hooks/use-theme'
 import { useChatStore } from '../../state/chat-store'
+import { isPlainEnterKey } from '../../utils/terminal-enter-detection'
 import { BORDER_CHARS } from '../../utils/ui-constants'
 import { Button } from '../button'
 
-import type { AskUserQuestion } from '../../state/chat-store'
+import type { AskUserQuestion } from '../../types/store'
+import type { KeyEvent } from '@opentui/core'
 
 export interface MultipleChoiceFormProps {
   questions: AskUserQuestion[]
@@ -159,6 +160,20 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
       setSubmitFocused(false)
       const isCustomOption = optionIndex === CUSTOM_OPTION_INDEX
 
+      // When clicking out of Custom typing mode, first click just exits and highlights
+      // the option without selecting it (requires a second click to actually select)
+      if (source === 'mouse' && isTypingCustom && !isCustomOption) {
+        setIsTypingCustom(false)
+        setFocusedOptionIndex(optionIndex)
+        setShowFocusHighlight(true)
+        // Deselect Custom option but preserve the typed text
+        setAnswerForQuestion(questionIndex, (currentAnswer) => ({
+          ...currentAnswer,
+          isCustom: false,
+        }))
+        return
+      }
+
       if (source === 'mouse' && !isCustomOption) {
         setShowFocusHighlight(false)
         suppressNextHoverFocusRef.current = true
@@ -177,6 +192,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
               selectedIndex: optionIndex,
               selectedIndices: undefined,
               isCustom: false,
+              customText: currentAnswer?.customText,  // Preserve custom text when switching away
             },
       )
 
@@ -197,7 +213,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
       setExpandedIndex(null)
       focusSubmit({ questionIndex, optionIndex })
     },
-    [questions, openQuestion, focusSubmit, setAnswerForQuestion],
+    [questions, openQuestion, focusSubmit, setAnswerForQuestion, isTypingCustom],
   )
 
   // Handle toggling an option (multi-select)
@@ -323,7 +339,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
             }
             return
           }
-          if (key.name === 'return' || key.name === 'enter' || key.name === 'space') {
+          if (isPlainEnterKey(key) || key.name === 'space') {
             preventDefault()
             handleSubmit()
             return
@@ -427,7 +443,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
           return
         }
 
-        if (key.name === 'return' || key.name === 'enter' || key.name === 'space') {
+        if (isPlainEnterKey(key) || key.name === 'space') {
           preventDefault()
 
           if (expandedIndex === null) {

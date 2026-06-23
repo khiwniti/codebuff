@@ -80,7 +80,7 @@ try {
 
   // Test 1: Import ripgrep functions via Tools namespace
   console.log('\n1. Testing ripgrep imports...')
-  const { getBundledRgPath, ToolHelpers } = await import('@codebuff/sdk')
+  const { getBundledRgPath, ToolHelpers } = await import('@openbuff/sdk')
 
   if (typeof getBundledRgPath !== 'function') {
     throw new Error(
@@ -215,7 +215,7 @@ try {
 
   // Test 9: Test error handling for invalid directory
   console.log('\n9. Testing error handling...')
-  const invalidResult = await ToolHelpers.codeSearch({
+  const _invalidResult = await ToolHelpers.codeSearch({
     projectPath: '/nonexistent/directory',
     pattern: 'test',
     maxResults: 1,

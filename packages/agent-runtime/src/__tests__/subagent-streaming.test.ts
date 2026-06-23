@@ -1,7 +1,7 @@
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { assistantMessage } from '@codebuff/common/util/messages'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
+import { assistantMessage } from '@khiwniti/common/util/messages'
 import {
   afterAll,
   beforeAll,
@@ -20,14 +20,14 @@ import { handleSpawnAgents } from '../tools/handlers/tool/spawn-agents'
 
 import type { AgentTemplate } from '../templates/types'
 import type { SendSubagentChunk } from '../tools/handlers/tool/spawn-agents'
-import type { CodebuffToolCall } from '@codebuff/common/tools/list'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
+import type { CodebuffToolCall } from '@khiwniti/common/tools/list'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
 import type { Mock } from 'bun:test'
 
 describe('Subagent Streaming', () => {
   let mockSendSubagentChunk: Mock<SendSubagentChunk>
   let mockLoopAgentSteps: Mock<(typeof runAgentStep)['loopAgentSteps']>
-  let mockAgentTemplate: any
+  let mockAgentTemplate: AgentTemplate
   let mockWriteToClient: Mock<
     Parameters<typeof handleSpawnAgents>[0]['writeToClient']
   >
@@ -44,8 +44,8 @@ describe('Subagent Streaming', () => {
       outputMode: 'last_message',
       inputSchema: {
         prompt: {
-          safeParse: () => ({ success: true }),
-        } as any,
+        safeParse: () => ({ success: true }),
+      } as unknown as AgentTemplate['inputSchema']['prompt'],
       },
       spawnerPrompt: '',
       model: '',
@@ -56,6 +56,7 @@ describe('Subagent Streaming', () => {
       systemPrompt: '',
       instructionsPrompt: '',
       stepPrompt: '',
+      mcpServers: {},
     }
 
     handleSpawnAgentsBaseParams = {

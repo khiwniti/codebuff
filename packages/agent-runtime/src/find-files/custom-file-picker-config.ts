@@ -2,10 +2,10 @@ import {
   finetunedVertexModelNames, // Restore usage
   costModes,
   type CostMode,
-} from '@codebuff/common/old-constants'
+} from '@khiwniti/common/old-constants'
 import { z } from 'zod/v4'
 
-// Create the customFileCounts shape using the centralized costModes
+// Create the customFileCounts shape using the centralized costModes ('free', 'normal', 'max', etc.)
 const customFileCountsShape = costModes.reduce(
   (acc, mode) => {
     acc[mode] = z.number().int().positive().optional()

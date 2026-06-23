@@ -5,10 +5,10 @@
  * process env with SDK-specific vars for binary paths and WASM.
  */
 
-import { getBaseEnv } from '@codebuff/common/env-process'
-import { BYOK_OPENROUTER_ENV_VAR } from '@codebuff/common/constants/byok'
-import { CLAUDE_OAUTH_TOKEN_ENV_VAR } from '@codebuff/common/constants/claude-oauth'
-import { API_KEY_ENV_VAR } from '@codebuff/common/constants/paths'
+import { BYOK_OPENROUTER_ENV_VAR } from '@khiwniti/common/constants/byok'
+import { CHATGPT_OAUTH_TOKEN_ENV_VAR } from '@khiwniti/common/constants/chatgpt-oauth'
+import { API_KEY_ENV_VAR } from '@khiwniti/common/constants/paths'
+import { getBaseEnv } from '@khiwniti/common/env-process'
 
 import type { SdkEnv } from './types/env'
 
@@ -43,9 +43,8 @@ export const getByokOpenrouterApiKeyFromEnv = (): string | undefined => {
 }
 
 /**
- * Get Claude OAuth token from environment variable.
- * This allows users to provide their Claude Pro/Max OAuth token for direct Anthropic API access.
+ * Get ChatGPT OAuth token from environment variable.
  */
-export const getClaudeOAuthTokenFromEnv = (): string | undefined => {
-  return process.env[CLAUDE_OAUTH_TOKEN_ENV_VAR]
+export const getChatGptOAuthTokenFromEnv = (): string | undefined => {
+  return process.env[CHATGPT_OAUTH_TOKEN_ENV_VAR]
 }

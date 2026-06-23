@@ -1,5 +1,7 @@
+import { modelMessageSchema } from 'ai'
 import { cloneDeep, has, isEqual } from 'lodash'
 
+import type { Logger } from '../types/contracts/logger'
 import type { JSONValue } from '../types/json'
 import type {
   AssistantMessage,
@@ -11,7 +13,6 @@ import type {
 } from '../types/messages/codebuff-message'
 import type { ToolResultOutput } from '../types/messages/content-part'
 import type { ProviderMetadata } from '../types/messages/provider-metadata'
-import { modelMessageSchema } from 'ai'
 import type {
   AssistantModelMessage,
   ModelMessage,
@@ -19,12 +20,16 @@ import type {
   ToolModelMessage,
   UserModelMessage,
 } from 'ai'
-import { Logger } from '../types/contracts/logger'
+
 
 export function toContentString(msg: ModelMessage): string {
   const { content } = msg
   if (typeof content === 'string') return content
-  return content.map((item) => (item as any)?.text ?? '').join('\n')
+  return content
+    .map((item) =>
+      item && 'text' in item && typeof item.text === 'string' ? item.text : '',
+    )
+    .join('\n')
 }
 
 export function withCacheControl<
@@ -121,6 +126,21 @@ function assistantToCodebuffMessage(
 function convertToolResultMessage(
   message: ToolMessage,
 ): ModelMessageWithAuxiliaryData[] {
+  if (message.content.length === 0) {
+    return [
+      cloneDeep<ToolModelMessage>({
+        ...message,
+        role: 'tool',
+        content: [
+          {
+            ...message,
+            output: { type: 'json', value: '' },
+            type: 'tool-result',
+          },
+        ],
+      }),
+    ]
+  }
   return message.content.map((c) => {
     if (c.type === 'json') {
       return cloneDeep<ToolModelMessage>({
@@ -137,8 +157,9 @@ function convertToolResultMessage(
       })
     }
     c satisfies never
-    const cAny = c as any
-    throw new Error(`Invalid tool output type: ${cAny.type}`)
+    throw new Error(
+      `Invalid tool output type: ${(c as { type: unknown }).type}`,
+    )
   })
 }
 
@@ -174,8 +195,9 @@ function convertToolMessage(message: Message): ModelMessageWithAuxiliaryData[] {
     return convertToolResultMessage(message)
   }
   message satisfies never
-  const messageAny = message as any
-  throw new Error(`Invalid message role: ${messageAny.role}`)
+  throw new Error(
+    `Invalid message role: ${(message as { role: unknown }).role}`,
+  )
 }
 
 function convertToolMessages(
@@ -186,6 +208,51 @@ function convertToolMessages(
     withoutToolMessages.push(...convertToolMessage(message))
   }
   return withoutToolMessages
+}
+
+/**
+ * Recursively replace any lone (unpaired) UTF-16 surrogate with U+FFFD in every
+ * string reachable from `value`, mutating objects/arrays in place.
+ *
+ * Why this exists: unsafe truncation (e.g. slicing a file read or terminal
+ * output in the middle of an emoji / astral-plane character) can leave a lone
+ * surrogate in message content. JS's `JSON.stringify` is "well-formed" and emits
+ * it as a syntactically-valid `\uXXXX` escape, and JS's `JSON.parse` is lenient
+ * and accepts it, so the corruption slips through every client-side check. But
+ * strict server-side parsers — notably Rust's serde_json, used by
+ * OpenAI/OpenRouter/Anthropic — reject the whole request body with
+ * "unexpected end of hex escape". Once such content lands in the message
+ * history, EVERY subsequent provider request fails fatally and the agent stops,
+ * even though nothing is wrong with the current turn's tool call.
+ *
+ * Sanitizing here, at the single chokepoint where all messages are converted to
+ * provider format, guarantees a single bad character can never poison the
+ * conversation regardless of which tool produced it. It is a no-op on
+ * already-valid strings, so valid emoji, base64, etc. are untouched.
+ *
+ * (Equivalent to `String.prototype.toWellFormed()`, implemented as a regex so we
+ * don't need to widen the project's TS lib to ES2024.)
+ */
+const LONE_SURROGATE_REGEX =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g
+
+function toWellFormedString(str: string): string {
+  return str.replace(LONE_SURROGATE_REGEX, '�')
+}
+
+function wellFormStringsInPlace(value: unknown): void {
+  // Arrays and plain objects are both handled here: Object.keys enumerates array
+  // indices too, and indexing by string key mutates the element in place.
+  if (!value || typeof value !== 'object') return
+  const obj = value as Record<string, unknown>
+  for (const key of Object.keys(obj)) {
+    const item = obj[key]
+    if (typeof item === 'string') {
+      obj[key] = toWellFormedString(item)
+    } else {
+      wellFormStringsInPlace(item)
+    }
+  }
 }
 
 export function convertCbToModelMessages({
@@ -230,6 +297,17 @@ export function convertCbToModelMessages({
     }
 
     aggregated.push(message)
+  }
+
+  // Neutralize any lone UTF-16 surrogates before the messages reach the provider.
+  // These are mutated in place; every aggregated message is a fresh clone (see
+  // convertToolMessage), so the caller's message history is unaffected.
+  for (const message of aggregated) {
+    if (typeof message.content === 'string') {
+      message.content = toWellFormedString(message.content)
+    } else {
+      wellFormStringsInPlace(message.content)
+    }
   }
 
   if (!includeCacheControl) {
@@ -319,8 +397,8 @@ export function convertCbToModelMessages({
       }
       throw new Error(
         `convertCbToModelMessages: Message at index ${i} failed schema validation.\n` +
-          `Role: ${message.role}\n` +
-          `Message:\n${result.error.message}`,
+        `Role: ${message.role}\n` +
+        `Message:\n${result.error.message}`,
       )
     }
   }
@@ -349,8 +427,8 @@ export function systemMessage(
   params:
     | SystemContent
     | ({
-        content: SystemContent
-      } & Omit<SystemMessage, 'role' | 'content'>),
+      content: SystemContent
+    } & Omit<SystemMessage, 'role' | 'content'>),
 ): SystemMessage {
   if (typeof params === 'object' && 'content' in params) {
     return {
@@ -383,8 +461,8 @@ export function userMessage(
   params:
     | UserContent
     | ({
-        content: UserContent
-      } & Omit<UserMessage, 'role' | 'content'>),
+      content: UserContent
+    } & Omit<UserMessage, 'role' | 'content'>),
 ): UserMessage {
   if (typeof params === 'object' && 'content' in params) {
     return {
@@ -421,8 +499,8 @@ export function assistantMessage(
   params:
     | AssistantContent
     | ({
-        content: AssistantContent
-      } & Omit<AssistantMessage, 'role' | 'content'>),
+      content: AssistantContent
+    } & Omit<AssistantMessage, 'role' | 'content'>),
 ): AssistantMessage {
   if (typeof params === 'object' && 'content' in params) {
     return {
@@ -442,10 +520,10 @@ export function assistantMessage(
 export function jsonToolResult<T extends JSONValue>(
   value: T,
 ): [
-  Extract<ToolResultOutput, { type: 'json' }> & {
-    value: T
-  },
-] {
+    Extract<ToolResultOutput, { type: 'json' }> & {
+      value: T
+    },
+  ] {
   return [
     {
       type: 'json',

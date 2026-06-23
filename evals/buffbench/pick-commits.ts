@@ -4,9 +4,9 @@ import { execFileSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 
-import { models } from '@codebuff/common/old-constants'
-import { userMessage } from '@codebuff/common/util/messages'
-import { promptAiSdkStructured } from '@codebuff/sdk'
+import { models } from '@khiwniti/common/old-constants'
+import { userMessage } from '@khiwniti/common/util/messages'
+import { promptAiSdkStructured } from '@khiwniti/sdk'
 import { mapLimit } from 'async'
 import { z } from 'zod/v4'
 
@@ -398,7 +398,7 @@ async function screenCommitsWithGpt5(
     const prompt = `${COMMIT_SCREENING_PROMPT}\n\nCommit to evaluate:\n\n${commitInfo}`
 
     try {
-      const response = await promptAiSdkStructured({
+      const result = await promptAiSdkStructured({
         messages: [userMessage(prompt)],
         schema: CommitSelectionSchema,
         model: models.openrouter_gpt5,
@@ -413,6 +413,14 @@ async function screenCommitsWithGpt5(
         runId: 'unused-run-id',
         signal: new AbortController().signal,
       })
+
+      // Handle aborted request
+      if (result.aborted) {
+        console.log(`Commit ${commit.sha.substring(0, 8)} screening aborted`)
+        return null
+      }
+
+      const response = result.value
 
       // Handle empty or invalid response
       if (

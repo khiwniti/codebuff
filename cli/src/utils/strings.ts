@@ -1,13 +1,37 @@
 import path from 'path'
 
+/** Max number of lines to show in collapsed previews */
+export const MAX_COLLAPSED_LINES = 3
+
+/**
+ * Truncate text to a maximum number of lines, adding '...' if truncated.
+ * Returns the input unchanged if it's null/undefined/empty.
+ */
+export function truncateToLines(
+  text: string | null | undefined,
+  maxLines: number,
+): string | null | undefined {
+  if (!text) return text
+  const lines = text.split('\n')
+  if (lines.length <= maxLines) {
+    return text
+  }
+  return lines.slice(0, maxLines).join('\n').trimEnd() + '...'
+}
+
+import { statSync } from 'fs'
+
 import {
-  hasClipboardImage,
-  readClipboardText,
-  readClipboardImageFilePath,
+  getFileOrFolderPathFromText,
   getImageFilePathFromText,
+  hasClipboardImage,
+  readClipboardFilePath,
+  readClipboardImageFilePath,
+  readClipboardText,
 } from './clipboard-image'
 import { isImageFile } from './image-handler'
-import type { InputValue } from '../state/chat-store'
+
+import type { InputValue } from '../types/store'
 
 export function getSubsequenceIndices(
   str: string,
@@ -37,7 +61,7 @@ export const BULLET_CHAR = '• '
 
 // Threshold for treating pasted text as an attachment instead of inline insertion
 // Text longer than this value (not equal) becomes an attachment
-export const LONG_TEXT_THRESHOLD = 1000
+export const LONG_TEXT_THRESHOLD = 2000
 
 /**
  * Insert text at cursor position and return the new text and cursor position.
@@ -65,7 +89,9 @@ export function createTextPasteHandler(
   onChange: (value: InputValue) => void,
 ): (eventText?: string) => void {
   return (eventText) => {
-    const pasteText = eventText || readClipboardText()
+    const rawPaste = eventText || readClipboardText()
+    if (!rawPaste) return
+    const pasteText = Bun.stripANSI(rawPaste)
     if (!pasteText) return
     const { newText, newCursor } = insertTextAtCursor(
       text,
@@ -96,6 +122,7 @@ export function createPasteHandler(options: {
   onChange: (value: InputValue) => void
   onPasteImage?: () => void
   onPasteImagePath?: (imagePath: string) => void
+  onPasteFilePath?: (filePath: string, isDirectory: boolean) => void
   onPasteLongText?: (text: string) => void
   cwd?: string
 }): (eventText?: string) => void {
@@ -105,10 +132,17 @@ export function createPasteHandler(options: {
     onChange,
     onPasteImage,
     onPasteImagePath,
+    onPasteFilePath,
     onPasteLongText,
     cwd,
   } = options
   return (eventText) => {
+    // Strip ANSI escape sequences from pasted text — terminal paste events
+    // (bracketed paste) may include ANSI sequences from the source content.
+    if (eventText) {
+      eventText = Bun.stripANSI(eventText)
+    }
+
     // If we have direct input text from the paste event (e.g., from terminal paste),
     // check if it looks like an image filename and if we can get the full path from clipboard
     if (eventText && onPasteImagePath) {
@@ -143,6 +177,15 @@ export function createPasteHandler(options: {
       }
     }
 
+    // Check if eventText is a path to a file or folder (drag-and-drop)
+    if (eventText && onPasteFilePath && cwd) {
+      const fileInfo = getFileOrFolderPathFromText(eventText, cwd)
+      if (fileInfo) {
+        onPasteFilePath(fileInfo.path, fileInfo.isDirectory)
+        return
+      }
+    }
+
     // eventText provided but not an image - check if it's long text
     if (eventText) {
       // If text is long, treat it as an attachment
@@ -167,16 +210,28 @@ export function createPasteHandler(options: {
 
     // No direct text provided - read from clipboard
 
-    // First, check if clipboard contains a copied image file (e.g., from Finder)
-    if (onPasteImagePath) {
-      const copiedImagePath = readClipboardImageFilePath()
-      if (copiedImagePath) {
-        onPasteImagePath(copiedImagePath)
-        return
+    // First, check if clipboard contains a copied file (e.g., from Finder)
+    if (onPasteImagePath || onPasteFilePath) {
+      const copiedFilePath = readClipboardFilePath()
+      if (copiedFilePath) {
+        if (isImageFile(copiedFilePath) && onPasteImagePath) {
+          onPasteImagePath(copiedFilePath)
+          return
+        }
+        if (!isImageFile(copiedFilePath) && onPasteFilePath) {
+          try {
+            const stats = statSync(copiedFilePath)
+            onPasteFilePath(copiedFilePath, stats.isDirectory())
+            return
+          } catch {
+            // Fall through to other paste handlers
+          }
+        }
       }
     }
 
-    const clipboardText = readClipboardText()
+    const rawClipboardText = readClipboardText()
+    const clipboardText = rawClipboardText ? Bun.stripANSI(rawClipboardText) : null
 
     // Check if clipboard text is a path to an image file
     if (clipboardText && onPasteImagePath && cwd) {

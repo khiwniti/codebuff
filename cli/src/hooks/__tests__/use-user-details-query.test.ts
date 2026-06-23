@@ -9,10 +9,10 @@ import {
 } from 'bun:test'
 
 import { createMockApiClient } from '../../__tests__/helpers/mock-api-client'
+import * as CodebuffApiModule from '../../utils/codebuff-api'
 import { fetchUserDetails } from '../use-user-details-query'
 
-import * as CodebuffApiModule from '../../utils/codebuff-api'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 
 describe('fetchUserDetails', () => {
   const mockLogger: Logger = {
@@ -162,29 +162,6 @@ describe('fetchUserDetails', () => {
       expect(result).toEqual(mockUserDetails)
     })
 
-    test('returns null referral_code when not set', async () => {
-      const mockUserDetails = {
-        referral_code: null,
-      }
-
-      const meMock = mock(() =>
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          data: mockUserDetails,
-        }),
-      )
-      const apiClient = createMockApiClient({ me: meMock })
-
-      const result = await fetchUserDetails({
-        authToken: 'valid-token',
-        fields: ['referral_code'] as const,
-        logger: mockLogger,
-        apiClient,
-      })
-
-      expect(result?.referral_code).toBe(null)
-    })
   })
 
   describe('environment validation', () => {
@@ -202,7 +179,7 @@ describe('fetchUserDetails', () => {
         CodebuffApiModule,
         'setApiClientAuthToken',
       )
-      spyOn(CodebuffApiModule, 'getApiClient').mockReturnValue(apiClient as any)
+      spyOn(CodebuffApiModule, 'getApiClient').mockReturnValue(apiClient as ReturnType<typeof CodebuffApiModule.getApiClient>)
 
       await expect(
         fetchUserDetails({

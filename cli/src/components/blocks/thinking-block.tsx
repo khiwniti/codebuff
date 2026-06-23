@@ -13,6 +13,8 @@ interface ThinkingBlockProps {
   onToggleCollapsed: (id: string) => void
   availableWidth: number
   isNested: boolean
+  /** Whether the parent message is complete (used to hide native reasoning blocks) */
+  isMessageComplete: boolean
 }
 
 export const ThinkingBlock = memo(
@@ -21,6 +23,7 @@ export const ThinkingBlock = memo(
     onToggleCollapsed,
     availableWidth,
     isNested,
+    isMessageComplete,
   }: ThinkingBlockProps) => {
     const firstBlock = blocks[0]
     const thinkingId = firstBlock?.thinkingId
@@ -29,7 +32,7 @@ export const ThinkingBlock = memo(
       .join('')
       .trim()
 
-    const isCollapsed = firstBlock?.isCollapsed ?? true
+    const thinkingCollapseState = firstBlock?.thinkingCollapseState ?? 'preview'
     const offset = isNested ? NESTED_WIDTH_OFFSET : WIDTH_OFFSET
     const availWidth = Math.max(10, availableWidth - offset)
 
@@ -39,6 +42,12 @@ export const ThinkingBlock = memo(
       }
     }, [onToggleCollapsed, thinkingId])
 
+    // thinkingOpen === false means explicitly closed (with </think> tag or message completion)
+    // Otherwise (true or undefined), completion is determined by message completion
+    const isThinkingComplete =
+      firstBlock?.thinkingOpen === false || isMessageComplete
+
+    // Hide if no content or no thinkingId (but NOT when thinking is complete)
     if (!combinedContent || !thinkingId) {
       return null
     }
@@ -47,7 +56,8 @@ export const ThinkingBlock = memo(
       <box>
         <Thinking
           content={combinedContent}
-          isCollapsed={isCollapsed}
+          thinkingCollapseState={thinkingCollapseState}
+          isThinkingComplete={isThinkingComplete}
           onToggle={handleToggle}
           availableWidth={availWidth}
         />

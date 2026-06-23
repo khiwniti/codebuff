@@ -1,14 +1,23 @@
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 
-import { pluralize } from '@codebuff/common/util/string'
-import { loadLocalAgents as sdkLoadLocalAgents } from '@codebuff/sdk'
+import { pluralize } from '@khiwniti/common/util/string'
+import {
+  loadLocalAgents as sdkLoadLocalAgents,
+  loadMCPConfigSync,
+} from '@khiwniti/sdk'
 
+import type { MCPConfig } from '@khiwniti/common/types/mcp'
+
+import { getSelectedFreebuffModel } from '../state/freebuff-model-store'
 import { getProjectRoot } from '../project-files'
-import { AGENT_MODE_TO_ID, type AgentMode } from './constants'
+import { IS_FREEBUFF, type AgentMode } from './constants'
+import { getAgentIdForMode } from './freebuff-agent-selection'
 import { logger } from './logger'
+import * as bundledAgentsModule from '../agents/bundled-agents.generated'
 
-import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
+import type { AgentDefinition } from '@khiwniti/common/templates/initial-agents-dir/types/agent-definition'
 
 // ============================================================================
 // Constants and types
@@ -31,35 +40,75 @@ export interface LocalAgentInfo {
 let userAgentsCache: Record<string, AgentDefinition> = {}
 // Map from agent ID to source file path (for UI "Open file" links)
 let userAgentFilePaths: Map<string, string> = new Map()
+// Cache for MCP servers loaded from mcp.json in .agents directories
+let mcpServersCache: Record<string, MCPConfig> = {}
 
 /**
  * Initialize the agent registry by loading user agents via the SDK.
  * This must be called at CLI startup before any sync agent loading functions.
+ *
+ * Agents are loaded from:
+ * - {cwd}/.agents (project)
+ * - {cwd}/../.agents (parent, e.g. monorepo root)
+ * - ~/.agents (global, user's home directory)
+ *
+ * Later directories take precedence, so project agents override global ones.
  */
 export async function initializeAgentRegistry(): Promise<void> {
-  const agentsDir = findAgentsDirectory()
-  if (agentsDir) {
-    try {
-      userAgentsCache = await sdkLoadLocalAgents({ agentsPath: agentsDir })
-      // Build ID-to-filepath map by scanning agent files
-      userAgentFilePaths = buildAgentFilePathMap(agentsDir)
-    } catch (error) {
-      // Fall back to empty cache if SDK loading fails, but log a warning
-      logger.warn({ error, agentsDir }, 'Failed to load user agents from .agents directory')
-      userAgentsCache = {}
-      userAgentFilePaths = new Map()
+  try {
+    // Let SDK load from all default directories (cwd, parent, home)
+    userAgentsCache = await sdkLoadLocalAgents({ verbose: false })
+    // Build ID-to-filepath map by scanning all agent directories
+    userAgentFilePaths = buildAgentFilePathMap(getDefaultAgentDirs())
+  } catch (error) {
+    // Fall back to empty cache if SDK loading fails, but log a warning
+    logger.warn(
+      { error },
+      'Failed to load user agents from .agents directories',
+    )
+    userAgentsCache = {}
+    userAgentFilePaths = new Map()
+  }
+
+  // Load MCP config from mcp.json files in .agents directories
+  try {
+    const mcpConfig = loadMCPConfigSync({ verbose: false })
+    mcpServersCache = mcpConfig.mcpServers
+    if (Object.keys(mcpServersCache).length > 0) {
+      logger.debug(
+        {
+          mcpServers: Object.keys(mcpServersCache),
+          source: mcpConfig._sourceFilePath,
+        },
+        '[agents] Loaded MCP servers from mcp.json',
+      )
     }
+  } catch (error) {
+    logger.warn({ error }, 'Failed to load MCP config from .agents directories')
+    mcpServersCache = {}
   }
 }
 
 /**
- * Scan agent directory and build a map from agent ID to source file path.
- * Uses regex to extract IDs from files without requiring module loading.
+ * Get default agent directories to scan.
+ * Matches the SDK's getDefaultAgentDirs() to ensure consistency.
  */
-const buildAgentFilePathMap = (agentsDir: string): Map<string, string> => {
+const getDefaultAgentDirs = (): string[] => {
+  const cwdAgents = path.join(process.cwd(), AGENTS_DIR_NAME)
+  const parentAgents = path.join(process.cwd(), '..', AGENTS_DIR_NAME)
+  const homeAgents = path.join(os.homedir(), AGENTS_DIR_NAME)
+  return [cwdAgents, parentAgents, homeAgents]
+}
+
+/**
+ * Scan agent directories and build a map from agent ID to source file path.
+ * Uses regex to extract IDs from files without requiring module loading.
+ * Later directories in the list take precedence (can override earlier ones).
+ */
+const buildAgentFilePathMap = (agentsDirs: string[]): Map<string, string> => {
   const idToPath = new Map<string, string>()
   const idRegex = /id\s*:\s*['"`]([^'"`]+)['"`]/i
-  
+
   const scanDirectory = (dir: string): void => {
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -69,7 +118,12 @@ const buildAgentFilePathMap = (agentsDir: string): Map<string, string> => {
           scanDirectory(fullPath)
           continue
         }
-        if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name.endsWith('.d.ts') || entry.name.endsWith('.test.ts')) {
+        if (
+          !entry.isFile() ||
+          !entry.name.endsWith('.ts') ||
+          entry.name.endsWith('.d.ts') ||
+          entry.name.endsWith('.test.ts')
+        ) {
           continue
         }
         try {
@@ -86,8 +140,11 @@ const buildAgentFilePathMap = (agentsDir: string): Map<string, string> => {
       // Skip directories that can't be read
     }
   }
-  
-  scanDirectory(agentsDir)
+
+  // Scan all directories - later directories override earlier ones
+  for (const agentsDir of agentsDirs) {
+    scanDirectory(agentsDir)
+  }
   return idToPath
 }
 
@@ -113,26 +170,12 @@ const getUserAgentDefinitions = (): AgentDefinition[] => {
 // Bundled agents loading (generated at build time by prebuild-agents.ts)
 // ============================================================================
 
-interface BundledAgentsModule {
-  bundledAgents: Record<string, AgentDefinition>
-  getBundledAgentsAsLocalInfo: () => LocalAgentInfo[]
-}
-
-// NOTE: Inline require() with try/catch is used because this file is generated at
-// build time by prebuild-agents.ts and may not exist during development
-let bundledAgentsModule: BundledAgentsModule | null = null
-try {
-  bundledAgentsModule = require('../agents/bundled-agents.generated')
-} catch {
-  // File not generated yet - running in development without prebuild
-}
-
 const getBundledAgents = (): Record<string, AgentDefinition> => {
-  return bundledAgentsModule?.bundledAgents ?? {}
+  return bundledAgentsModule.bundledAgents ?? {}
 }
 
 const getBundledAgentsAsLocalInfo = (): LocalAgentInfo[] => {
-  return bundledAgentsModule?.getBundledAgentsAsLocalInfo?.() ?? []
+  return bundledAgentsModule.getBundledAgentsAsLocalInfo?.() ?? []
 }
 
 // ============================================================================
@@ -193,13 +236,18 @@ const cachedAgentsByMode: Map<string, LocalAgentInfo[]> = new Map()
 
 /**
  * Load local agents for display in the '@' menu.
- * 
+ *
  * @param currentAgentMode - If provided, filters bundled agents to only include
  *   subagents of the current mode's agent (e.g., base2's spawnableAgents for DEFAULT mode).
  *   User's local agents from .agents/ are always included regardless of mode.
  */
-export const loadLocalAgents = (currentAgentMode?: AgentMode): LocalAgentInfo[] => {
-  const cacheKey = currentAgentMode ?? 'all'
+export const loadLocalAgents = (
+  currentAgentMode?: AgentMode,
+): LocalAgentInfo[] => {
+  const selectedFreebuffModel = IS_FREEBUFF ? getSelectedFreebuffModel() : null
+  const cacheKey = selectedFreebuffModel
+    ? `${currentAgentMode ?? 'all'}:${selectedFreebuffModel}`
+    : (currentAgentMode ?? 'all')
   const cached = cachedAgentsByMode.get(cacheKey)
   if (cached) {
     return cached
@@ -209,35 +257,37 @@ export const loadLocalAgents = (currentAgentMode?: AgentMode): LocalAgentInfo[] 
   // compiled into the CLI binary at build time
   const bundledAgentsInfo = getBundledAgentsAsLocalInfo()
   const bundledAgents = getBundledAgents()
-  
+
   // Filter bundled agents to only include subagents of the current mode's agent
   let filteredBundledAgents: LocalAgentInfo[]
   if (currentAgentMode) {
-    const currentAgentId = AGENT_MODE_TO_ID[currentAgentMode]
+    const currentAgentId = getAgentIdForMode(currentAgentMode)
     const currentAgentDef = bundledAgents[currentAgentId]
+      ? bundledAgents[currentAgentId]
+      : undefined
     const spawnableAgentIds = new Set(currentAgentDef?.spawnableAgents ?? [])
-    
+
     // Only include bundled agents that are in the spawnableAgents list
-    filteredBundledAgents = bundledAgentsInfo.filter(agent => 
-      spawnableAgentIds.has(agent.id)
+    filteredBundledAgents = bundledAgentsInfo.filter((agent) =>
+      spawnableAgentIds.has(agent.id),
     )
   } else {
     filteredBundledAgents = bundledAgentsInfo
   }
-  
+
   const results: LocalAgentInfo[] = [...filteredBundledAgents]
-  const includedIds = new Set(filteredBundledAgents.map(a => a.id))
+  const includedIds = new Set(filteredBundledAgents.map((a) => a.id))
 
   // Get user agents from the SDK-loaded cache
   // User agents are always included (not filtered by mode) and can override bundled agents
   const userAgents = getUserAgentsAsLocalInfo()
-  
+
   // Merge user agents - they override bundled agents with same ID
   // and are always included regardless of mode filtering
   for (const userAgent of userAgents) {
     if (includedIds.has(userAgent.id)) {
       // Replace bundled agent with user's version
-      const idx = results.findIndex(a => a.id === userAgent.id)
+      const idx = results.findIndex((a) => a.id === userAgent.id)
       if (idx !== -1) {
         results[idx] = userAgent
       }
@@ -250,7 +300,7 @@ export const loadLocalAgents = (currentAgentMode?: AgentMode): LocalAgentInfo[] 
   const sorted = results.sort((a, b) =>
     a.displayName.localeCompare(b.displayName, 'en'),
   )
-  
+
   cachedAgentsByMode.set(cacheKey, sorted)
   return sorted
 }
@@ -264,7 +314,7 @@ export const loadLocalAgents = (currentAgentMode?: AgentMode): LocalAgentInfo[] 
  * Bundled agents are compiled into the CLI binary at build time.
  * User agents from .agents/ are loaded via SDK at startup and cached.
  * User agents can override bundled agents with the same ID.
- * 
+ *
  * Additionally, all user agent IDs are automatically added to the spawnableAgents
  * of any base agent (agents with IDs starting with 'base'), so users can spawn
  * their custom agents without needing to modify the base agent definition.
@@ -272,17 +322,19 @@ export const loadLocalAgents = (currentAgentMode?: AgentMode): LocalAgentInfo[] 
 export const loadAgentDefinitions = (): AgentDefinition[] => {
   // Start with bundled agents - these are the default Codebuff agents
   const bundledAgents = getBundledAgents()
-  const definitions: AgentDefinition[] = Object.values(bundledAgents).map(def => ({ ...def }))
+  const definitions: AgentDefinition[] = Object.values(bundledAgents).map(
+    (def) => ({ ...def }),
+  )
   const bundledIds = new Set(Object.keys(bundledAgents))
 
   // Get user agents from the SDK-loaded cache
   const userAgentDefs = getUserAgentDefinitions()
-  const userAgentIds = userAgentDefs.map(def => def.id)
+  const userAgentIds = userAgentDefs.map((def) => def.id)
 
   for (const agentDef of userAgentDefs) {
     // User agents override bundled agents with the same ID
     if (bundledIds.has(agentDef.id)) {
-      const idx = definitions.findIndex(d => d.id === agentDef.id)
+      const idx = definitions.findIndex((d) => d.id === agentDef.id)
       if (idx !== -1) {
         definitions[idx] = { ...agentDef }
       }
@@ -303,6 +355,25 @@ export const loadAgentDefinitions = (): AgentDefinition[] => {
           if (!existingSpawnable.has(userAgentId)) {
             def.spawnableAgents = [...def.spawnableAgents, userAgentId]
           }
+        }
+      }
+    }
+  }
+
+  // Merge MCP servers from mcp.json into base agents
+  // This allows users to configure MCP tools that are available to the main agent
+  if (Object.keys(mcpServersCache).length > 0) {
+    for (const def of definitions) {
+      // Consider any agent with an ID starting with 'base' as a base agent
+      if (def.id.startsWith('base')) {
+        // Initialize mcpServers if not present
+        if (!def.mcpServers) {
+          def.mcpServers = {}
+        }
+        // Merge MCP servers (user config can override existing servers)
+        def.mcpServers = {
+          ...def.mcpServers,
+          ...mcpServersCache,
         }
       }
     }
@@ -391,4 +462,13 @@ export const __resetLocalAgentRegistryForTests = (): void => {
   cachedAgentsDir = null
   userAgentsCache = {}
   userAgentFilePaths = new Map()
+  mcpServersCache = {}
+}
+
+/**
+ * Get the currently loaded MCP servers from mcp.json.
+ * Useful for debugging and displaying loaded MCP configuration.
+ */
+export const getLoadedMCPServers = (): Record<string, MCPConfig> => {
+  return { ...mcpServersCache }
 }

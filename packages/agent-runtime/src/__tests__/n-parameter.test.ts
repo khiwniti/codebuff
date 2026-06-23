@@ -1,8 +1,9 @@
-import * as analytics from '@codebuff/common/analytics'
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
+import * as analytics from '@khiwniti/common/analytics'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { createTestAgentRuntimeParams } from '@khiwniti/common/testing/fixtures/agent-runtime'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
+import { promptAborted, promptSuccess } from '@khiwniti/common/util/error'
+import { assistantMessage, userMessage } from '@khiwniti/common/util/messages'
 import {
   afterEach,
   beforeEach,
@@ -18,14 +19,14 @@ import {
   clearAgentGeneratorCache,
   runProgrammaticStep,
 } from '../run-programmatic-step'
-import * as toolExecutor from '../tools/tool-executor'
 import { mockFileContext } from './test-utils'
+import * as toolExecutor from '../tools/tool-executor'
 
 import type { AgentTemplate, StepGenerator } from '../templates/types'
-import type { PromptAiSdkFn } from '@codebuff/common/types/contracts/llm'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsOf } from '@codebuff/common/types/function-params'
-import type { AgentState } from '@codebuff/common/types/session-state'
+import type { PromptAiSdkFn } from '@khiwniti/common/types/contracts/llm'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsOf } from '@khiwniti/common/types/function-params'
+import type { AgentState } from '@khiwniti/common/types/session-state'
 
 const logger: Logger = {
   debug: () => {},
@@ -125,7 +126,7 @@ describe('n parameter and GENERATE_N functionality', () => {
     it('should call promptAiSdk with n parameter when n is provided', async () => {
       runAgentStepBaseParams.promptAiSdk = mock(() =>
         Promise.resolve(
-          JSON.stringify(['Response 1', 'Response 2', 'Response 3']),
+          promptSuccess(JSON.stringify(['Response 1', 'Response 2', 'Response 3'])),
         ),
       )
 
@@ -158,7 +159,7 @@ describe('n parameter and GENERATE_N functionality', () => {
       })
 
       runAgentStepBaseParams.promptAiSdk = mock(async () =>
-        JSON.stringify(['Response 1', 'Response 2']),
+        promptSuccess(JSON.stringify(['Response 1', 'Response 2'])),
       )
 
       await runAgentStep({
@@ -180,7 +181,7 @@ describe('n parameter and GENERATE_N functionality', () => {
       ]
 
       runAgentStepBaseParams.promptAiSdk = mock(async () =>
-        JSON.stringify(responses),
+        promptSuccess(JSON.stringify(responses)),
       )
 
       const result = await runAgentStep({
@@ -194,12 +195,12 @@ describe('n parameter and GENERATE_N functionality', () => {
 
     it('should use normal flow when n is undefined', async () => {
       runAgentStepBaseParams.promptAiSdk = mock(
-        async () => 'Should not be called',
+        async () => promptSuccess('Should not be called'),
       )
 
       runAgentStepBaseParams.promptAiSdkStream = mock(async function* () {
         yield { type: 'text' as const, text: 'Normal response' }
-        return 'mock-message-id'
+        return promptSuccess('mock-message-id')
       })
 
       const result = await runAgentStep({
@@ -852,7 +853,7 @@ describe('n parameter and GENERATE_N functionality', () => {
   describe('runAgentStep n parameter edge cases', () => {
     it('should handle promptAiSdk returning malformed JSON', async () => {
       runAgentStepBaseParams.promptAiSdk = mock(() =>
-        Promise.resolve('Not valid JSON'),
+        Promise.resolve(promptSuccess('Not valid JSON')),
       )
 
       await expect(
@@ -875,7 +876,7 @@ describe('n parameter and GENERATE_N functionality', () => {
         async (params: ParamsOf<PromptAiSdkFn>): ReturnType<PromptAiSdkFn> => {
           // Call onCostCalculated to simulate cost tracking
           await params.onCostCalculated?.(100)
-          return JSON.stringify(['R1', 'R2', 'R3'])
+          return promptSuccess(JSON.stringify(['R1', 'R2', 'R3']))
         },
       )
 
@@ -895,7 +896,7 @@ describe('n parameter and GENERATE_N functionality', () => {
 
     it('should preserve messageHistory when using n parameter', async () => {
       runAgentStepBaseParams.promptAiSdk = mock(() =>
-        Promise.resolve(JSON.stringify(['R1', 'R2'])),
+        Promise.resolve(promptSuccess(JSON.stringify(['R1', 'R2']))),
       )
 
       const result = await runAgentStep({
@@ -911,6 +912,65 @@ describe('n parameter and GENERATE_N functionality', () => {
 
       // Verify the messages are preserved
       expect(result.agentState.messageHistory).toBeDefined()
+    })
+
+    it('should return early with shouldEndTurn: true when promptAiSdk returns aborted', async () => {
+      runAgentStepBaseParams.promptAiSdk = mock(() =>
+        Promise.resolve(promptAborted('User cancelled')),
+      )
+
+      const result = await runAgentStep({
+        ...runAgentStepBaseParams,
+        n: 3,
+      })
+
+      // Verify promptAiSdk was called
+      expect(runAgentStepBaseParams.promptAiSdk).toHaveBeenCalled()
+
+      // Verify early return values for aborted request
+      expect(result.fullResponse).toBe('')
+      expect(result.shouldEndTurn).toBe(true)
+      expect(result.messageId).toBe(null)
+      expect(result.nResponses).toBeUndefined()
+    })
+
+    it('should return early when promptAiSdk returns aborted without reason', async () => {
+      runAgentStepBaseParams.promptAiSdk = mock(() =>
+        Promise.resolve(promptAborted()),
+      )
+
+      const result = await runAgentStep({
+        ...runAgentStepBaseParams,
+        n: 2,
+      })
+
+      expect(result.fullResponse).toBe('')
+      expect(result.shouldEndTurn).toBe(true)
+      expect(result.messageId).toBe(null)
+      expect(result.nResponses).toBeUndefined()
+    })
+
+    it('should not modify agentState.creditsUsed when promptAiSdk is aborted before onCostCalculated', async () => {
+      const freshAgentState = {
+        ...mockAgentState,
+        creditsUsed: 0,
+        directCreditsUsed: 0,
+      }
+
+      // Mock promptAiSdk to return aborted without calling onCostCalculated
+      runAgentStepBaseParams.promptAiSdk = mock(() =>
+        Promise.resolve(promptAborted()),
+      )
+
+      const result = await runAgentStep({
+        ...runAgentStepBaseParams,
+        agentState: freshAgentState,
+        n: 3,
+      })
+
+      // Credits should remain 0 since request was aborted
+      expect(result.agentState.creditsUsed).toBe(0)
+      expect(result.agentState.directCreditsUsed).toBe(0)
     })
   })
 })

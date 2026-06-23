@@ -1,8 +1,8 @@
-import * as bigquery from '@codebuff/bigquery'
-import * as analytics from '@codebuff/common/analytics'
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
+import * as analytics from '@khiwniti/common/analytics'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
+import { promptSuccess } from '@khiwniti/common/util/error'
 import {
   afterEach,
 
@@ -15,7 +15,7 @@ import {
 } from 'bun:test'
 
 import { createToolCallChunk, mockFileContext } from './test-utils'
-import researcherAgent from '../../../../agents/researcher/researcher'
+import researcherAgent from '../../../../agents-graveyard/researcher/researcher'
 import * as webApi from '../llm-api/codebuff-web-api'
 import { runAgentStep } from '../run-agent-step'
 import { assembleLocalAgentTemplates } from '../templates/agent-registry'
@@ -23,8 +23,8 @@ import { assembleLocalAgentTemplates } from '../templates/agent-registry'
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
-} from '@codebuff/common/types/contracts/agent-runtime'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
+} from '@khiwniti/common/types/contracts/agent-runtime'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
 
 let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
 let runAgentStepBaseParams: ParamsExcluding<
@@ -32,14 +32,14 @@ let runAgentStepBaseParams: ParamsExcluding<
   'fileContext' | 'localAgentTemplates' | 'agentState' | 'prompt' | 'agentTemplate'
 >
 
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
+import type { StreamChunk } from '@khiwniti/common/types/contracts/llm'
 
 function mockAgentStream(chunks: StreamChunk[]) {
   const mockPromptAiSdkStream = async function* ({}) {
     for (const chunk of chunks) {
       yield chunk
     }
-    return 'mock-message-id'
+    return promptSuccess('mock-message-id')
   }
   agentRuntimeImpl.promptAiSdkStream = mockPromptAiSdkStream
   runAgentStepBaseParams.promptAiSdkStream = mockPromptAiSdkStream
@@ -52,9 +52,6 @@ describe('read_docs tool with researcher agent (via web API facade)', () => {
     spyOn(analytics, 'trackEvent').mockImplementation(() => {})
     spyOn(analytics, 'flushAnalytics').mockImplementation(() =>
       Promise.resolve(),
-    )
-    spyOn(bigquery, 'insertTrace').mockImplementation(() =>
-      Promise.resolve(true),
     )
 
     agentRuntimeImpl.requestFiles = async () => ({})

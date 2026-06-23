@@ -1,18 +1,19 @@
-import { AgentTemplateTypes } from '@codebuff/common/types/session-state'
+import { AgentTemplateTypes } from '@khiwniti/common/types/session-state'
 
-import type { ToolName } from '@codebuff/common/tools/constants'
+import type { ToolName } from '@khiwniti/common/tools/constants'
 import type {
   AgentTemplate,
   StepGenerator,
   StepHandler,
-} from '@codebuff/common/types/agent-template'
-import type { AgentTemplateType } from '@codebuff/common/types/session-state'
+} from '@khiwniti/common/types/agent-template'
+import type { AgentTemplateType } from '@khiwniti/common/types/session-state'
 
 // Re-export for backward compatibility
 export type { AgentTemplate, StepGenerator, StepHandler }
 
 const placeholderNames = [
   'AGENT_NAME',
+  'CURRENT_DATE',
   'FILE_TREE_PROMPT_SMALL',
   'FILE_TREE_PROMPT',
   'FILE_TREE_PROMPT_LARGE',

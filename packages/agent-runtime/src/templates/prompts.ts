@@ -1,12 +1,13 @@
-import { getAgentTemplate } from './agent-registry'
-import { buildArray } from '@codebuff/common/util/array'
-import { schemaToJsonStr } from '@codebuff/common/util/zod-schema'
+import { buildArray } from '@khiwniti/common/util/array'
+import { schemaToJsonStr } from '@khiwniti/common/util/zod-schema'
 import { z } from 'zod/v4'
 
-import type { AgentTemplate } from '@codebuff/common/types/agent-template'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { AgentTemplateType } from '@codebuff/common/types/session-state'
+import { getAgentTemplate } from './agent-registry'
+
+import type { AgentTemplate } from '@khiwniti/common/types/agent-template'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { AgentTemplateType } from '@khiwniti/common/types/session-state'
 import type { ToolSet } from 'ai'
 
 function ensureJsonSchemaCompatible(schema: z.ZodType): z.ZodType {
@@ -27,6 +28,14 @@ export function getAgentShortName(agentType: AgentTemplateType): string {
   const withoutVersion = agentType.split('@')[0]
   const parts = withoutVersion.split('/')
   return parts[parts.length - 1]
+}
+
+/**
+ * Converts an agent ID into the provider-facing tool name used for direct
+ * subagent calls. Agent IDs remain hyphenated; tool names use underscores.
+ */
+export function getAgentToolName(agentType: AgentTemplateType): string {
+  return getAgentShortName(agentType).replace(/-/g, '_')
 }
 
 /**
@@ -58,7 +67,6 @@ export function buildAgentToolInputSchema(
     )
 }
 
-
 /**
  * Builds AI SDK tool definitions for spawnable agents.
  * These tools allow the model to call agents directly as tool calls.
@@ -86,13 +94,13 @@ export async function buildAgentToolSet(
 
     if (!agentTemplate) continue
 
-    const shortName = getAgentShortName(agentType)
+    const toolName = getAgentToolName(agentType)
     const inputSchema = ensureJsonSchemaCompatible(
       buildAgentToolInputSchema(agentTemplate),
     )
 
     // Use the same structure as other tools in toolParams
-    toolSet[shortName] = {
+    toolSet[toolName] = {
       description:
         agentTemplate.spawnerPrompt ||
         `Spawn the ${agentTemplate.displayName} agent`,

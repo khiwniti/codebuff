@@ -1,4 +1,4 @@
-import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
+import { AnalyticsEvent } from '@khiwniti/common/constants/analytics-events'
 
 import {
   createStreamParserState,
@@ -6,29 +6,70 @@ import {
 } from './util/stream-xml-parser'
 
 import type { StreamParserState } from './util/stream-xml-parser'
-import type { Model } from '@codebuff/common/old-constants'
-import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { Model } from '@khiwniti/common/old-constants'
+import type { TrackEventFn } from '@khiwniti/common/types/contracts/analytics'
+import type { StreamChunk } from '@khiwniti/common/types/contracts/llm'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 import type {
   PrintModeError,
   PrintModeText,
-} from '@codebuff/common/types/print-mode'
+} from '@khiwniti/common/types/print-mode'
+import type { PromptResult } from '@khiwniti/common/util/error'
+
+function summarizeToolInput(input: unknown): Record<string, unknown> {
+  if (typeof input === 'string') {
+    return {
+      inputType: 'string',
+      inputLength: input.length,
+    }
+  }
+
+  if (Array.isArray(input)) {
+    return {
+      inputType: 'array',
+      inputLength: input.length,
+    }
+  }
+
+  if (input && typeof input === 'object') {
+    const keys = Object.keys(input as Record<string, unknown>)
+    return {
+      inputType: 'object',
+      inputKeyCount: keys.length,
+      inputKeys: keys.slice(0, 25),
+    }
+  }
+
+  return {
+    inputType: input === null ? 'null' : typeof input,
+  }
+}
 
 export async function* processStreamWithTools(params: {
-  stream: AsyncGenerator<StreamChunk, string | null>
+  stream: AsyncGenerator<StreamChunk, PromptResult<string | null>>
   processors: Record<
     string,
     {
-      onTagStart: (tagName: string, attributes: Record<string, string>) => void
-      onTagEnd: (tagName: string, params: Record<string, any>) => void
+      onTagStart: (
+        tagName: string,
+        attributes: Record<string, string>,
+      ) => void | Promise<void>
+      onTagEnd: (
+        tagName: string,
+        params: Record<string, any>,
+      ) => void | Promise<void>
     }
   >
   defaultProcessor: (toolName: string) => {
-    onTagStart: (tagName: string, attributes: Record<string, string>) => void
-    onTagEnd: (tagName: string, params: Record<string, any>) => void
+    onTagStart: (
+      tagName: string,
+      attributes: Record<string, string>,
+    ) => void | Promise<void>
+    onTagEnd: (
+      tagName: string,
+      params: Record<string, any>,
+    ) => void | Promise<void>
   }
-  onError: (tagName: string, errorMessage: string) => void
   onResponseChunk: (chunk: PrintModeText | PrintModeError) => void
   logger: Logger
   loggerOptions?: {
@@ -42,12 +83,11 @@ export async function* processStreamWithTools(params: {
     toolName: string
     input: Record<string, unknown>
   }) => Promise<void>
-}): AsyncGenerator<StreamChunk, string | null> {
+}): AsyncGenerator<StreamChunk, PromptResult<string | null>> {
   const {
     stream,
     processors,
     defaultProcessor,
-    onError,
     onResponseChunk,
     logger,
     loggerOptions,
@@ -61,12 +101,22 @@ export async function* processStreamWithTools(params: {
   // State for parsing XML tool calls from text stream
   const xmlParserState: StreamParserState = createStreamParserState()
 
-  function processToolCallObject(params: {
+  async function processToolCallObject(params: {
     toolName: string
     input: any
     contents?: string
-  }): void {
-    const { toolName, input, contents } = params
+  }): Promise<void> {
+    const { toolName, contents } = params
+    let { input } = params
+
+    // AI SDK sometimes emits tool-call chunks with a raw JSON string as `input`
+    // when its repair pass can't produce a parsed object. Try to parse; if it
+    // fails, leave as string — the executor surfaces a clear error.
+    if (typeof input === 'string') {
+      try {
+        input = JSON.parse(input)
+      } catch {}
+    }
 
     const processor = processors[toolName] ?? defaultProcessor(toolName)
 
@@ -75,8 +125,9 @@ export async function* processStreamWithTools(params: {
       userId: loggerOptions?.userId ?? '',
       properties: {
         toolName,
-        contents,
-        parsedParams: input,
+        ...summarizeToolInput(input),
+        hasContents: typeof contents === 'string' && contents.length > 0,
+        contentsLength: contents?.length ?? 0,
         autocompleted,
         model: loggerOptions?.model,
         agent: loggerOptions?.agentName,
@@ -84,8 +135,8 @@ export async function* processStreamWithTools(params: {
       logger,
     })
 
-    processor.onTagStart(toolName, {})
-    processor.onTagEnd(toolName, input)
+    await processor.onTagStart(toolName, {})
+    await processor.onTagEnd(toolName, input)
   }
 
   function flush() {
@@ -145,27 +196,34 @@ export async function* processStreamWithTools(params: {
     }
 
     if (chunk.type === 'tool-call') {
-      processToolCallObject(chunk)
+      await processToolCallObject(chunk)
     }
 
     yield chunk
   }
 
-  let messageId: string | null = null
-  while (true) {
-    const { value, done } = await stream.next()
-    if (done) {
-      messageId = value
-      break
+  let result: PromptResult<string | null> = { aborted: false, value: null }
+  try {
+    while (true) {
+      const { value, done } = await stream.next()
+      if (done) {
+        result = value
+        break
+      }
+      if (streamCompleted) {
+        break
+      }
+      yield* processChunk(value)
     }
-    if (streamCompleted) {
-      break
+    if (!streamCompleted) {
+      // After the stream ends, try parsing one last time in case there's leftover text
+      yield* processChunk(undefined)
     }
-    yield* processChunk(value)
+  } finally {
+    // Flush any remaining buffered text so it reaches onResponseChunk even on
+    // abort. Without this, text streamed after the last tool call would be lost
+    // from the message history.
+    flush()
   }
-  if (!streamCompleted) {
-    // After the stream ends, try parsing one last time in case there's leftover text
-    yield* processChunk(undefined)
-  }
-  return messageId
+  return result
 }

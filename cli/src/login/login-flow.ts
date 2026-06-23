@@ -4,7 +4,7 @@ import type {
   CodebuffApiClient,
   LoginCodeResponse,
 } from '../utils/codebuff-api'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 
 // Re-export for backwards compatibility
 export type LoginUrlResponse = LoginCodeResponse

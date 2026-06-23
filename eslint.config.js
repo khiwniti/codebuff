@@ -12,6 +12,7 @@ export default tseslint.config(
       '**/.next/*',
       '**/.contentlayer/*',
       '**/node_modules/*',
+      'agents-graveyard/**', // Archived/deprecated agents - no need to lint
     ],
   },
 
@@ -24,7 +25,7 @@ export default tseslint.config(
         {
           paths: [
             {
-              name: '@codebuff/common/env-process',
+              name: '@openbuff/common/env-process',
               importNames: ['getProcessEnv', 'processEnv'],
               message:
                 'CLI should use getCliEnv() from "../utils/env" or "./env" instead of getProcessEnv() from common. This ensures CLI uses CliEnv type.',
@@ -32,7 +33,7 @@ export default tseslint.config(
           ],
           patterns: [
             {
-              group: ['@codebuff/common/types/contracts/env'],
+              group: ['@openbuff/common/types/contracts/env'],
               importNames: ['ProcessEnv'],
               message:
                 'CLI should use CliEnv from "../types/env" instead of ProcessEnv from common.',
@@ -52,7 +53,7 @@ export default tseslint.config(
         {
           paths: [
             {
-              name: '@codebuff/common/env-process',
+              name: '@openbuff/common/env-process',
               importNames: ['getProcessEnv', 'processEnv'],
               message:
                 'SDK should use getSdkEnv() from "./env" instead of getProcessEnv() from common. This ensures SDK uses SdkEnv type.',
@@ -60,7 +61,7 @@ export default tseslint.config(
           ],
           patterns: [
             {
-              group: ['@codebuff/common/types/contracts/env'],
+              group: ['@openbuff/common/types/contracts/env'],
               importNames: ['ProcessEnv'],
               message:
                 'SDK should use SdkEnv from "./types/env" instead of ProcessEnv from common.',
@@ -111,7 +112,7 @@ export default tseslint.config(
           'newlines-between': 'always',
         },
       ],
-      'import/no-unresolved': 'warn',
+      'import/no-unresolved': 'off', // Disabled: TypeScript/Bun handles module resolution; this rule produces false positives with path aliases
       'import/no-duplicates': 'warn',
       'unused-imports/no-unused-imports': 'warn',
       '@typescript-eslint/consistent-type-imports': [
@@ -121,7 +122,16 @@ export default tseslint.config(
           fixStyle: 'separate-type-imports',
         },
       ],
-      'no-unused-vars': 'warn',
+      'no-unused-vars': [
+        'warn',
+        {
+          argsIgnorePattern: '^_', // Allow unused args prefixed with _
+          varsIgnorePattern: '^_', // Allow unused vars prefixed with _
+          args: 'none', // Don't check function arguments (common in callbacks with required signatures)
+        },
+      ],
+      'react-hooks/exhaustive-deps': 'off', // Disabled: plugin not configured for all packages
+      '@next/next/no-img-element': 'off', // Disabled: plugin not configured for all packages
     },
   },
 

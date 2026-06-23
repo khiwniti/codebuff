@@ -1,12 +1,18 @@
 #!/usr/bin/env bun
 
+// Embed tree-sitter.wasm into the bun-compile binary at a bunfs path the runtime
+// can find. Without this, web-tree-sitter resolves the wasm via require.resolve,
+// which (since 0.25.10's split exports map) returns the build-time absolute path
+// of tree-sitter.cjs and fails on user machines. Must run before the SDK / code-map
+// import chain triggers Parser.init.
+import './pre-init/tree-sitter-wasm'
+
 import fs from 'fs'
-import { createRequire } from 'module'
 import os from 'os'
 import path from 'path'
 
-import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
-import { getProjectFileTree } from '@codebuff/common/project-file-tree'
+import { AnalyticsEvent } from '@khiwniti/common/constants/analytics-events'
+import { getProjectFileTree } from '@khiwniti/common/project-file-tree'
 import { createCliRenderer } from '@opentui/core'
 import { createRoot } from '@opentui/react'
 import {
@@ -14,55 +20,38 @@ import {
   QueryClientProvider,
   focusManager,
 } from '@tanstack/react-query'
-import { Command } from 'commander'
 import { cyan, green, red, yellow } from 'picocolors'
 import React from 'react'
 
 import { App } from './app'
+import { loadPackageVersion, parseArgs } from './cli-args'
 import { handlePublish } from './commands/publish'
+import { runPlainLogin } from './login/plain-login'
 import { initializeApp } from './init/init-app'
 import { getProjectRoot, setProjectRoot } from './project-files'
-import { initAnalytics, trackEvent } from './utils/analytics'
-import { getAuthTokenDetails } from './utils/auth'
+import { trackEvent } from './utils/analytics'
+import { getAuthToken, getAuthTokenDetails } from './utils/auth'
 import { resetCodebuffClient } from './utils/codebuff-client'
-import { getCliEnv } from './utils/env'
+import { setApiClientAuthToken } from './utils/codebuff-api'
+import { IS_FREEBUFF } from './utils/constants'
 import { initializeAgentRegistry } from './utils/local-agent-registry'
+import { trimOversizedChatLogs } from './utils/chat-history'
 import { clearLogFile, logger } from './utils/logger'
 import { shouldShowProjectPicker } from './utils/project-picker'
 import { saveRecentProject } from './utils/recent-projects'
-import { installProcessCleanupHandlers } from './utils/renderer-cleanup'
+import { installProcessCleanupHandlers, TERMINAL_RESET_SEQUENCES } from './utils/renderer-cleanup'
+import { initializeSkillRegistry } from './utils/skill-registry'
 import { detectTerminalTheme } from './utils/terminal-color-detection'
 import { setOscDetectedTheme } from './utils/theme-system'
 
-import type { AgentMode } from './utils/constants'
-import type { FileTreeNode } from '@codebuff/common/util/file'
-
-const require = createRequire(import.meta.url)
-
-function loadPackageVersion(): string {
-  const env = getCliEnv()
-  if (env.CODEBUFF_CLI_VERSION) {
-    return env.CODEBUFF_CLI_VERSION
-  }
-
-  try {
-    const pkg = require('../package.json') as { version?: string }
-    if (pkg.version) {
-      return pkg.version
-    }
-  } catch {
-    // Continue to dev fallback
-  }
-
-  return 'dev'
-}
+import type { FileTreeNode } from '@khiwniti/common/util/file'
 
 // Configure TanStack Query's focusManager for terminal environments
 // This is required because there's no browser visibility API in terminal apps
 // Without this, refetchInterval won't work because TanStack Query thinks the app is "unfocused"
 focusManager.setEventListener(() => {
   // No-op: no event listeners in CLI environment (no window focus/visibility events)
-  return () => {}
+  return () => { }
 })
 focusManager.setFocused(true)
 
@@ -84,70 +73,83 @@ function createQueryClient(): QueryClient {
   })
 }
 
-type ParsedArgs = {
-  initialPrompt: string | null
-  agent?: string
-  clearLogs: boolean
-  continue: boolean
-  continueId?: string | null
-  cwd?: string
-  initialMode?: AgentMode
-}
-
-function parseArgs(): ParsedArgs {
-  const program = new Command()
-
-  program
-    .name('codebuff')
-    .description('Codebuff CLI - AI-powered coding assistant')
-    .version(loadPackageVersion(), '-v, --version', 'Print the CLI version')
-    .option(
-      '--agent <agent-id>',
-      'Run a specific agent id (skips loading local .agents overrides)',
-    )
-    .option('--clear-logs', 'Remove any existing CLI log files before starting')
-    .option(
-      '--continue [conversation-id]',
-      'Continue from a previous conversation (optionally specify a conversation id)',
-    )
-    .option(
-      '--cwd <directory>',
-      'Set the working directory (default: current directory)',
-    )
-    .option('--lite', 'Start in LITE mode')
-    .option('--max', 'Start in MAX mode')
-    .option('--plan', 'Start in PLAN mode')
-    .helpOption('-h, --help', 'Show this help message')
-    .argument('[prompt...]', 'Initial prompt to send to the agent')
-    .allowExcessArguments(true)
-    .parse(process.argv)
-
-  const options = program.opts()
-  const args = program.args
-
-  const continueFlag = options.continue
-
-  // Determine initial mode from flags (last flag wins if multiple specified)
-  let initialMode: AgentMode | undefined
-  if (options.lite) initialMode = 'LITE'
-  if (options.max) initialMode = 'MAX'
-  if (options.plan) initialMode = 'PLAN'
-
-  return {
-    initialPrompt: args.length > 0 ? args.join(' ') : null,
-    agent: options.agent,
-    clearLogs: options.clearLogs || false,
-    continue: Boolean(continueFlag),
-    continueId:
-      typeof continueFlag === 'string' && continueFlag.trim().length > 0
-        ? continueFlag.trim()
-        : null,
-    cwd: options.cwd,
-    initialMode,
-  }
-}
-
 async function main(): Promise<void> {
+  // CI gate: `<binary> --smoke-tree-sitter` proves the embedded wasm boots
+  // through Parser.init end-to-end. Has to live BEFORE commander.parse() —
+  // an earlier attempt put this in a pre-init module with top-level await,
+  // and on Windows that didn't actually pause module evaluation (commander
+  // still ran first and rejected the unknown flag).
+  if (process.argv.includes('--smoke-tree-sitter')) {
+    const wasmBinary = (
+      globalThis as { __CODEBUFF_TREE_SITTER_WASM_BINARY__?: Uint8Array }
+    ).__CODEBUFF_TREE_SITTER_WASM_BINARY__
+    const wasmPath = (
+      globalThis as { __CODEBUFF_TREE_SITTER_WASM_PATH__?: string }
+    ).__CODEBUFF_TREE_SITTER_WASM_PATH__
+
+    // Diagnostic dump so CI logs (and bug reports) show exactly what
+    // the runtime saw when smoke fails. process.execPath, the
+    // siblingPath we expect, and what's actually in that directory.
+    const fs = await import('fs')
+    const path = await import('path')
+    const execDir = path.dirname(process.execPath)
+    const siblingPath = path.join(execDir, 'tree-sitter.wasm')
+    let dirListing: string[] = []
+    try {
+      dirListing = fs.readdirSync(execDir)
+    } catch (err) {
+      dirListing = [`<readdir failed: ${err instanceof Error ? err.message : err}>`]
+    }
+    console.error(
+      `[smoke diag] execPath=${process.execPath}\n` +
+        `[smoke diag] execDir=${execDir}\n` +
+        `[smoke diag] siblingPath=${siblingPath}\n` +
+        `[smoke diag] siblingExists=${fs.existsSync(siblingPath)}\n` +
+        `[smoke diag] dir contents (${dirListing.length}): ${dirListing.slice(0, 30).join(', ')}\n` +
+        `[smoke diag] globalThis wasmPath=${wasmPath ?? '<unset>'}\n` +
+        `[smoke diag] globalThis wasmBinary bytes=${wasmBinary?.byteLength ?? 0}\n`,
+    )
+
+    try {
+      const { Parser } = await import('web-tree-sitter')
+      // Pick the best wasm source available, falling back to the
+      // sibling-of-execPath lookup if pre-init couldn't reach it. By
+      // main() time process.execPath has stabilized to the disk path
+      // even on Windows, where it was the bunfs path during pre-init.
+      let effectiveBinary = wasmBinary
+      let effectivePath = wasmPath
+      if (!effectiveBinary && !effectivePath && fs.existsSync(siblingPath)) {
+        effectivePath = siblingPath
+        effectiveBinary = new Uint8Array(fs.readFileSync(siblingPath))
+      }
+
+      if (effectiveBinary) {
+        await Parser.init({ wasmBinary: effectiveBinary })
+        // Marker grepped by cli/scripts/smoke-binary.ts — keep this exact text.
+        console.log(
+          `tree-sitter smoke ok (wasmBinary, ${effectiveBinary.byteLength} bytes)`,
+        )
+      } else if (effectivePath) {
+        await Parser.init({
+          locateFile: (name: string) =>
+            name === 'tree-sitter.wasm' ? effectivePath! : name,
+        })
+        console.log(`tree-sitter smoke ok (locateFile, path=${effectivePath})`)
+      } else {
+        console.error(
+          'tree-sitter smoke FAIL: no wasm available — pre-init published ' +
+            'nothing and the sibling-of-execPath fallback also missed. See ' +
+            'the diag above for paths.',
+        )
+        process.exit(1)
+      }
+      process.exit(0)
+    } catch (err) {
+      console.error('tree-sitter smoke FAIL:', err)
+      process.exit(1)
+    }
+  }
+
   // Run OSC theme detection BEFORE anything else.
   // This MUST happen before OpenTUI starts because OSC responses come through stdin,
   // and OpenTUI also listens to stdin. Running detection here ensures stdin is clean.
@@ -164,6 +166,7 @@ async function main(): Promise<void> {
 
   const {
     initialPrompt,
+    command,
     agent,
     clearLogs,
     continue: continueChat,
@@ -172,10 +175,20 @@ async function main(): Promise<void> {
     initialMode,
   } = parseArgs()
 
-  const isPublishCommand = process.argv.includes('publish')
-  const hasAgentOverride = Boolean(agent && agent.trim().length > 0)
+  const isLoginCommand = command === 'login'
+  const isPublishCommand = command === 'publish'
+  const hasAgentOverride = Boolean(agent?.trim())
 
   await initializeApp({ cwd })
+
+  // Set the auth token for the API client
+  setApiClientAuthToken(getAuthToken())
+
+  // Handle login command before rendering the app
+  if (isLoginCommand) {
+    await runPlainLogin()
+    return
+  }
 
   // Show project picker only when user starts at the home directory or an ancestor
   const projectRoot = getProjectRoot()
@@ -183,11 +196,26 @@ async function main(): Promise<void> {
   const startCwd = process.cwd()
   const showProjectPicker = shouldShowProjectPicker(startCwd, homeDir)
 
+  // Requires analytics to be initialized, which is done in initializeApp
+  trackEvent(AnalyticsEvent.APP_LAUNCHED, {
+    version: loadPackageVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    hasInitialPrompt: Boolean(initialPrompt),
+    hasAgentOverride: hasAgentOverride,
+    continueChat,
+    initialMode: initialMode ?? 'DEFAULT',
+    isFreeBuff: IS_FREEBUFF,
+  })
+
   // Initialize agent registry (loads user agents via SDK).
   // When --agent is provided, skip local .agents to avoid overrides.
   if (isPublishCommand || !hasAgentOverride) {
     await initializeAgentRegistry()
   }
+
+  // Initialize skill registry (loads skills from .agents/skills)
+  await initializeSkillRegistry()
 
   // Handle publish command before rendering the app
   if (isPublishCommand) {
@@ -214,28 +242,14 @@ async function main(): Promise<void> {
     }
   }
 
-  // Initialize analytics
-  try {
-    initAnalytics()
-
-    // Track app launch event
-    trackEvent(AnalyticsEvent.APP_LAUNCHED, {
-      version: loadPackageVersion(),
-      platform: process.platform,
-      arch: process.arch,
-      hasInitialPrompt: Boolean(initialPrompt),
-      hasAgentOverride: hasAgentOverride,
-      continueChat,
-      initialMode: initialMode ?? 'DEFAULT',
-    })
-  } catch (error) {
-    // Analytics initialization is optional - don't fail the app if it errors
-    logger.debug(error, 'Failed to initialize analytics')
-  }
-
   if (clearLogs) {
     clearLogFile()
   }
+
+  // Reclaim disk from oversized debug logs left by older versions that logged
+  // the full conversation to log.jsonl. Deferred to keep the stat sweep over
+  // chat directories off the startup path.
+  setTimeout(trimOversizedChatLogs, 0)
 
   const queryClient = createQueryClient()
 
@@ -269,7 +283,6 @@ async function main(): Promise<void> {
             projectRoot: root,
             fs: fs.promises,
           })
-          logger.info({ tree }, 'Loaded file tree')
           setFileTree(tree)
         }
       } catch (error) {
@@ -284,7 +297,6 @@ async function main(): Promise<void> {
     // Callback for when user selects a new project from the picker
     const handleProjectChange = React.useCallback(
       async (newProjectPath: string) => {
-        const previousPath = process.cwd()
         // Change process working directory
         process.chdir(newProjectPath)
 
@@ -328,10 +340,43 @@ async function main(): Promise<void> {
     )
   }
 
+  // Install early error handlers BEFORE renderer creation.
+  // If the renderer crashes during init, these ensure the error is visible
+  // by exiting the alternate screen buffer before printing the error.
+  const earlyFatalHandler = (error: unknown) => {
+    try {
+      if (process.stdin.isTTY && process.stdin.setRawMode) {
+        process.stdin.setRawMode(false)
+      }
+    } catch {
+      // stdin may be closed
+    }
+    try {
+      if (process.stdout.isTTY) {
+        process.stdout.write(TERMINAL_RESET_SEQUENCES)
+      }
+    } catch {
+      // stdout may be closed
+    }
+    try {
+      console.error('Fatal error during startup:', error)
+    } catch {
+      // stderr may be closed
+    }
+    process.exit(1)
+  }
+  process.on('uncaughtException', earlyFatalHandler)
+  process.on('unhandledRejection', earlyFatalHandler)
+
   const renderer = await createCliRenderer({
     backgroundColor: 'transparent',
     exitOnCtrlC: false,
+    screenMode: 'alternate-screen',
   })
+
+  // Remove early handlers — proper cleanup handlers (with renderer access) take over
+  process.removeListener('uncaughtException', earlyFatalHandler)
+  process.removeListener('unhandledRejection', earlyFatalHandler)
   installProcessCleanupHandlers(renderer)
   createRoot(renderer).render(
     <QueryClientProvider client={queryClient}>

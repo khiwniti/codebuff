@@ -1,6 +1,56 @@
 # Changelog
 
-All notable changes to the @codebuff/sdk package will be documented in this file.
+All notable changes to the openbuff package will be documented in this file.
+
+## [1.0.0] - 2026-06-23
+
+### Major Release - Openbuff Brand
+
+- **Package renamed**: `@codebuff/sdk` → `openbuff`
+- Full SDK for building AI coding agents and assistants
+- Support for custom agents and tools
+- Knowledge file management
+- Local agent loading
+- Multiple LLM provider support (OpenAI, Anthropic, Google, etc.)
+- Tree-sitter based code analysis
+- TypeScript-first with full type definitions
+
+### Migration from @codebuff/sdk
+
+```bash
+# Before
+npm install @codebuff/sdk
+
+# After
+npm install openbuff
+```
+
+All API remains the same - just update the import!
+
+```typescript
+// Before
+import { CodebuffClient } from '@codebuff/sdk'
+
+// After
+import { CodebuffClient } from 'openbuff'
+```
+
+## [0.10.7]
+
+- New code editing tool `apply_patch` which works well with Codex models (e.g. openai/gpt-5.3-codex)
+- `write_file` is now a deterministic tool that creates or replaces the file. Previously, it also accepted edit snippet comments which could expand to keep a portion of the previous file, e.g. "// ... rest of the function ...". That behavior is removed to keep things simple. `str_replace` or `apply_patch` should be used if not overwriting the whole file.
+
+## [0.10.6]
+
+Added `skillsDir` parameter to specify a directory to load skills from.
+
+## [0.10.5]
+
+Fixed a bug with missing tool calls/results.
+
+## [0.10.4]
+
+Updated with various agent runtime improvements.
 
 ## [0.10.1]
 

@@ -1,8 +1,10 @@
-import type { CodebuffClient, AgentDefinition } from '@codebuff/sdk'
-import { withTimeout } from '@codebuff/common/util/promise'
-import { getErrorObject } from '@codebuff/common/util/error'
 import fs from 'fs'
 import path from 'path'
+
+import { getErrorObject } from '@khiwniti/common/util/error'
+import { withTimeout } from '@khiwniti/common/util/promise'
+
+import type { CodebuffClient, AgentDefinition } from '@khiwniti/sdk'
 
 export interface TaskAnalysisData {
   commitSha: string

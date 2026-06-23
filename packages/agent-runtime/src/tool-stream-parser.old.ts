@@ -1,19 +1,19 @@
-import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
+import { AnalyticsEvent } from '@khiwniti/common/constants/analytics-events'
 import {
   endsAgentStepParam,
   endToolTag,
   startToolTag,
   toolNameParam,
-} from '@codebuff/common/tools/constants'
+} from '@khiwniti/common/tools/constants'
 
-import type { Model } from '@codebuff/common/old-constants'
-import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
-import type { StreamChunk } from '@codebuff/common/types/contracts/llm'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { Model } from '@khiwniti/common/old-constants'
+import type { TrackEventFn } from '@khiwniti/common/types/contracts/analytics'
+import type { StreamChunk } from '@khiwniti/common/types/contracts/llm'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 import type {
   PrintModeError,
   PrintModeText,
-} from '@codebuff/common/types/print-mode'
+} from '@khiwniti/common/types/print-mode'
 
 const toolExtractionPattern = new RegExp(
   `${startToolTag}(.*?)${endToolTag}`,
@@ -21,6 +21,35 @@ const toolExtractionPattern = new RegExp(
 )
 
 const completionSuffix = `${JSON.stringify(endsAgentStepParam)}: true\n}${endToolTag}`
+
+function summarizeToolInput(input: unknown): Record<string, unknown> {
+  if (typeof input === 'string') {
+    return {
+      inputType: 'string',
+      inputLength: input.length,
+    }
+  }
+
+  if (Array.isArray(input)) {
+    return {
+      inputType: 'array',
+      inputLength: input.length,
+    }
+  }
+
+  if (input && typeof input === 'object') {
+    const keys = Object.keys(input as Record<string, unknown>)
+    return {
+      inputType: 'object',
+      inputKeyCount: keys.length,
+      inputKeys: keys.slice(0, 25),
+    }
+  }
+
+  return {
+    inputType: input === null ? 'null' : typeof input,
+  }
+}
 
 export async function* processStreamWithTags(params: {
   stream: AsyncGenerator<StreamChunk, string | null>
@@ -87,7 +116,7 @@ export async function* processStreamWithTags(params: {
         event: AnalyticsEvent.MALFORMED_TOOL_CALL_JSON,
         userId: loggerOptions?.userId ?? '',
         properties: {
-          contents: JSON.stringify(contents),
+          contentsLength: contents.length,
           model: loggerOptions?.model,
           agent: loggerOptions?.agentName,
           error: {
@@ -122,7 +151,7 @@ export async function* processStreamWithTags(params: {
         event: AnalyticsEvent.UNKNOWN_TOOL_CALL,
         userId: loggerOptions?.userId ?? '',
         properties: {
-          contents,
+          contentsLength: contents.length,
           toolName,
           model: loggerOptions?.model,
           agent: loggerOptions?.agentName,
@@ -142,8 +171,9 @@ export async function* processStreamWithTags(params: {
       userId: loggerOptions?.userId ?? '',
       properties: {
         toolName,
-        contents,
-        parsedParams,
+        ...summarizeToolInput(parsedParams),
+        hasContents: contents.length > 0,
+        contentsLength: contents.length,
         autocompleted,
         model: loggerOptions?.model,
         agent: loggerOptions?.agentName,

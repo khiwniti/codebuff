@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import { CURSOR_CHAR } from '../components/multiline-input'
 import {
   copyTextToClipboard,
+  registerClipboardRenderer,
   subscribeClipboardMessages,
+  unregisterClipboardRenderer,
 } from '../utils/clipboard'
 
 function formatDefaultClipboardMessage(text: string): string | null {
@@ -19,6 +21,7 @@ function formatDefaultClipboardMessage(text: string): string | null {
 export const useClipboard = () => {
   const renderer = useRenderer()
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const [hasSelection, setHasSelection] = useState(false)
   const pendingCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   )
@@ -28,6 +31,18 @@ export const useClipboard = () => {
   useEffect(() => {
     return subscribeClipboardMessages(setStatusMessage)
   }, [])
+
+  // Register the renderer globally so all copyTextToClipboard callers
+  // can use the renderer's OSC 52 method when available.
+  useEffect(() => {
+    if (renderer) {
+      registerClipboardRenderer(renderer as unknown as Record<string, unknown>)
+      return () => {
+        unregisterClipboardRenderer()
+      }
+    }
+    return undefined
+  }, [renderer])
 
   useEffect(() => {
     const handleSelection = (selectionEvent: any) => {
@@ -43,6 +58,7 @@ export const useClipboard = () => {
 
       if (!cleanedText || cleanedText.trim().length === 0) {
         pendingSelectionRef.current = null
+        setHasSelection(false)
         if (pendingCopyTimeoutRef.current) {
           clearTimeout(pendingCopyTimeoutRef.current)
           pendingCopyTimeoutRef.current = null
@@ -53,6 +69,9 @@ export const useClipboard = () => {
       if (cleanedText === pendingSelectionRef.current) {
         return
       }
+
+      // Track that there's an active selection for visual feedback
+      setHasSelection(true)
 
       pendingSelectionRef.current = cleanedText
 
@@ -72,9 +91,14 @@ export const useClipboard = () => {
         void copyTextToClipboard(pending, {
           successMessage,
           durationMs: 3000,
-        }).catch(() => {
-          // Errors are logged within copyTextToClipboard
         })
+          .then(() => {
+            // Clear selection visual state after successful copy
+            setHasSelection(false)
+          })
+          .catch(() => {
+            // Errors are logged within copyTextToClipboard
+          })
       }, 250)
     }
 
@@ -98,5 +122,6 @@ export const useClipboard = () => {
 
   return {
     statusMessage,
+    hasSelection,
   }
 }

@@ -1,33 +1,38 @@
-import { MAX_AGENT_STEPS_DEFAULT } from '@codebuff/common/constants/agents'
-import { parseAgentId } from '@codebuff/common/util/agent-id-parsing'
-import { generateCompactId } from '@codebuff/common/util/string'
+import { MAX_AGENT_STEPS_DEFAULT } from '@khiwniti/common/constants/agents'
+import { toolNames } from '@khiwniti/common/tools/constants'
+import {
+  normalizeAgentIdForLookup,
+  parseAgentId,
+} from '@khiwniti/common/util/agent-id-parsing'
+import { generateCompactId } from '@khiwniti/common/util/string'
 
 import { loopAgentSteps } from '../../../run-agent-step'
 import { getAgentTemplate } from '../../../templates/agent-registry'
+import { formatValueForError } from '../../../util/format-value'
 import {
   filterUnfinishedToolCalls,
   withSystemTags,
 } from '../../../util/messages'
 
-import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import type { AgentTemplate } from '@khiwniti/common/types/agent-template'
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
-} from '@codebuff/common/types/contracts/agent-runtime'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
+} from '@khiwniti/common/types/contracts/agent-runtime'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
 import type {
   ParamsExcluding,
   OptionalFields,
-} from '@codebuff/common/types/function-params'
-import type { ToolSet } from 'ai'
-import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+} from '@khiwniti/common/types/function-params'
+import type { Message } from '@khiwniti/common/types/messages/codebuff-message'
+import type { PrintModeEvent } from '@khiwniti/common/types/print-mode'
 import type {
   AgentState,
   AgentTemplateType,
   Subgoal,
-} from '@codebuff/common/types/session-state'
-import type { ProjectFileContext } from '@codebuff/common/util/file'
-import { Message } from '@codebuff/common/types/messages/codebuff-message'
+} from '@khiwniti/common/types/session-state'
+import type { ProjectFileContext } from '@khiwniti/common/util/file'
+import type { ToolSet } from 'ai'
 
 /**
  * Common context params needed for spawning subagents.
@@ -37,6 +42,8 @@ import { Message } from '@codebuff/common/types/messages/codebuff-message'
 export type SubagentContextParams = AgentRuntimeDeps &
   AgentRuntimeScopedDeps & {
     clientSessionId: string
+    costMode?: string
+    extraCodebuffMetadata?: Record<string, string>
     fileContext: ProjectFileContext
     localAgentTemplates: Record<string, AgentTemplate>
     repoId: string | undefined
@@ -89,6 +96,8 @@ export function extractSubagentContextParams(
 
     // Core context params
     clientSessionId: params.clientSessionId,
+    costMode: params.costMode,
+    extraCodebuffMetadata: params.extraCodebuffMetadata,
     fileContext: params.fileContext,
     localAgentTemplates: params.localAgentTemplates,
     repoId: params.repoId,
@@ -109,7 +118,7 @@ export function getMatchingSpawn(
     publisherId: childPublisherId,
     agentId: childAgentId,
     version: childVersion,
-  } = parseAgentId(childFullAgentId)
+  } = parseAgentId(normalizeAgentIdForLookup(childFullAgentId))
 
   if (!childAgentId) {
     return null
@@ -120,7 +129,7 @@ export function getMatchingSpawn(
       publisherId: spawnablePublisherId,
       agentId: spawnableAgentId,
       version: spawnableVersion,
-    } = parseAgentId(spawnableAgent)
+    } = parseAgentId(normalizeAgentIdForLookup(spawnableAgent))
 
     if (!spawnableAgentId) {
       continue
@@ -171,28 +180,35 @@ export async function validateAndGetAgentTemplate(
   } & ParamsExcluding<typeof getAgentTemplate, 'agentId'>,
 ): Promise<{ agentTemplate: AgentTemplate; agentType: string }> {
   const { agentTypeStr, parentAgentTemplate } = params
-  const agentTemplate = await getAgentTemplate({
-    ...params,
-    agentId: agentTypeStr,
-  })
+  const BASE_AGENTS = ['base', 'base-free', 'base-max', 'base-experimental']
+  const isBaseAgent = BASE_AGENTS.includes(parentAgentTemplate.id)
+  const agentType = isBaseAgent
+    ? normalizeAgentIdForLookup(agentTypeStr)
+    : getMatchingSpawn(parentAgentTemplate.spawnableAgents, agentTypeStr)
 
-  if (!agentTemplate) {
-    throw new Error(`Agent type ${agentTypeStr} not found.`)
-  }
-  const BASE_AGENTS = ['base', 'base-lite', 'base-max', 'base-experimental']
-  // Base agent can spawn any agent
-  if (BASE_AGENTS.includes(parentAgentTemplate.id)) {
-    return { agentTemplate, agentType: agentTypeStr }
-  }
-
-  const agentType = getMatchingSpawn(
-    parentAgentTemplate.spawnableAgents,
-    agentTypeStr,
-  )
   if (!agentType) {
+    if (toolNames.includes(agentTypeStr as any)) {
+      throw new Error(
+        `"${agentTypeStr}" is a tool, not an agent. Call it directly as a tool instead of wrapping it in spawn_agents.`,
+      )
+    }
     throw new Error(
       `Agent type ${parentAgentTemplate.id} is not allowed to spawn child agent type ${agentTypeStr}.`,
     )
+  }
+
+  const agentTemplate = await getAgentTemplate({
+    ...params,
+    agentId: agentType,
+  })
+
+  if (!agentTemplate) {
+    if (toolNames.includes(agentTypeStr as any)) {
+      throw new Error(
+        `"${agentTypeStr}" is a tool, not an agent. Call it directly as a tool instead of wrapping it in spawn_agents.`,
+      )
+    }
+    throw new Error(`Agent type ${agentTypeStr} not found.`)
   }
 
   return { agentTemplate, agentType }
@@ -214,7 +230,7 @@ export function validateAgentInput(
     const result = inputSchema.prompt.safeParse(prompt ?? '')
     if (!result.success) {
       throw new Error(
-        `Invalid prompt for agent ${agentType}: ${JSON.stringify(result.error.issues, null, 2)}`,
+        `Invalid prompt for agent ${agentType}: ${JSON.stringify(result.error.issues, null, 2)}\n\nOriginal prompt value:\n${formatValueForError(prompt ?? '')}`,
       )
     }
   }
@@ -224,7 +240,7 @@ export function validateAgentInput(
     const result = inputSchema.params.safeParse(params ?? {})
     if (!result.success) {
       throw new Error(
-        `Invalid params for agent ${agentType}: ${JSON.stringify(result.error.issues, null, 2)}`,
+        `Invalid params for agent ${agentType}: ${JSON.stringify(result.error.issues, null, 2)}\n\nOriginal params value:\n${formatValueForError(params ?? {})}`,
       )
     }
   }

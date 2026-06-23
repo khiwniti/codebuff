@@ -1,18 +1,18 @@
-import { processStrReplace } from '../../../process-str-replace'
 import {
   getProposedContent,
   setProposedContent,
 } from './proposed-content-store'
+import { processStrReplace } from '../../../process-str-replace'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
   CodebuffToolOutput,
-} from '@codebuff/common/tools/list'
-import type { RequestOptionalFileFn } from '@codebuff/common/types/contracts/client'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { AgentState } from '@codebuff/common/types/session-state'
+} from '@khiwniti/common/tools/list'
+import type { RequestOptionalFileFn } from '@khiwniti/common/types/contracts/client'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { AgentState } from '@khiwniti/common/types/session-state'
 
 export const handleProposeStrReplace = (async (
   params: {

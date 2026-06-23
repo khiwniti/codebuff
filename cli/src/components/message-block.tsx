@@ -1,22 +1,26 @@
 import { TextAttributes } from '@opentui/core'
 import { memo, useState } from 'react'
 
-import { Button } from './button'
-import { ImageCard } from './image-card'
-import { TextAttachmentCard } from './text-attachment-card'
-import { MessageFooter } from './message-footer'
-import { UserErrorBanner } from './user-error-banner'
-import { ValidationErrorPopover } from './validation-error-popover'
 import { BlocksRenderer } from './blocks/blocks-renderer'
 import { UserContentWithCopyButton } from './blocks/user-content-copy'
+import { Button } from './button'
+import { FileAttachmentCard } from './file-attachment-card'
+import { ImageCard } from './image-card'
+import { MessageFooter } from './message-footer'
+import { TextAttachmentCard } from './text-attachment-card'
+import { UserErrorBanner } from './user-error-banner'
+import { ValidationErrorPopover } from './validation-error-popover'
 import { useTheme } from '../hooks/use-theme'
 import { useWhyDidYouUpdateById } from '../hooks/use-why-did-you-update'
 import { getCliEnv } from '../utils/env'
 import { type MarkdownPalette } from '../utils/markdown-renderer'
 import { formatCwd } from '../utils/path-helpers'
 
+import type { FeedbackCategory } from '@khiwniti/common/constants/feedback'
+
 import type {
   ContentBlock,
+  FileAttachment,
   ImageAttachment,
   TextAttachment,
   ChatMessageMetadata,
@@ -43,18 +47,20 @@ interface MessageBlockProps {
   onToggleCollapsed: (id: string) => void
   onBuildFast: () => void
   onBuildMax: () => void
+  onBuildLite: () => void
   onFeedback?: (messageId: string) => void
   onCloseFeedback?: () => void
   validationErrors?: Array<{ id: string; message: string }>
   /** Runtime error to display in UI but NOT send to LLM */
   userError?: string
   onOpenFeedback?: (options?: {
-    category?: string
+    category?: FeedbackCategory
     footerMessage?: string
     errors?: Array<{ id: string; message: string }>
   }) => void
   attachments?: ImageAttachment[]
   textAttachments?: TextAttachment[]
+  fileAttachments?: FileAttachment[]
   metadata?: ChatMessageMetadata
   isLastMessage?: boolean
 }
@@ -62,11 +68,13 @@ interface MessageBlockProps {
 const MessageAttachments = memo(({
   imageAttachments,
   textAttachments,
+  fileAttachments,
 }: {
   imageAttachments: ImageAttachment[]
   textAttachments: TextAttachment[]
+  fileAttachments: FileAttachment[]
 }) => {
-  if (imageAttachments.length === 0 && textAttachments.length === 0) {
+  if (imageAttachments.length === 0 && textAttachments.length === 0 && fileAttachments.length === 0) {
     return null
   }
 
@@ -76,7 +84,6 @@ const MessageAttachments = memo(({
         flexDirection: 'row',
         gap: 1,
         flexWrap: 'wrap',
-        marginTop: 1,
       }}
     >
       {imageAttachments.map((attachment) => (
@@ -89,6 +96,13 @@ const MessageAttachments = memo(({
       {textAttachments.map((attachment) => (
         <TextAttachmentCard
           key={attachment.id}
+          attachment={attachment}
+          showRemoveButton={false}
+        />
+      ))}
+      {fileAttachments.map((attachment) => (
+        <FileAttachmentCard
+          key={attachment.path}
           attachment={attachment}
           showRemoveButton={false}
         />
@@ -117,6 +131,7 @@ export const MessageBlock = memo(({
   onToggleCollapsed,
   onBuildFast,
   onBuildMax,
+  onBuildLite,
   onFeedback,
   onCloseFeedback,
   validationErrors,
@@ -124,6 +139,7 @@ export const MessageBlock = memo(({
   onOpenFeedback,
   attachments,
   textAttachments,
+  fileAttachments,
   metadata,
   isLastMessage,
 }: MessageBlockProps) => {
@@ -154,6 +170,7 @@ export const MessageBlock = memo(({
       onToggleCollapsed,
       onBuildFast,
       onBuildMax,
+      onBuildLite,
       onFeedback,
       onCloseFeedback,
       validationErrors,
@@ -255,53 +272,57 @@ export const MessageBlock = memo(({
           </box>
         )}
 
-      {blocks ? (
-        <box
-          style={{
-            flexDirection: 'column',
-            gap: 0,
-            width: '100%',
-            paddingTop: 0,
-          }}
-        >
-          <BlocksRenderer
-            sourceBlocks={blocks}
+      <box style={{ flexDirection: 'column', gap: 1, width: '100%' }}>
+        {blocks ? (
+          <box
+            style={{
+              flexDirection: 'column',
+              gap: 1,
+              width: '100%',
+            }}
+          >
+            <BlocksRenderer
+              sourceBlocks={blocks}
+              messageId={messageId}
+              isLoading={isLoading}
+              isComplete={isComplete}
+              isUser={isUser}
+              textColor={resolvedTextColor}
+              availableWidth={availableWidth}
+              markdownPalette={markdownPalette}
+              onToggleCollapsed={onToggleCollapsed}
+              onBuildFast={onBuildFast}
+              onBuildMax={onBuildMax}
+              onBuildLite={onBuildLite}
+              isLastMessage={isLastMessage}
+              contentToCopy={isUser ? content : undefined}
+            />
+          </box>
+        ) : (
+          <UserContentWithCopyButton
+            content={content}
             messageId={messageId}
             isLoading={isLoading}
             isComplete={isComplete}
             isUser={isUser}
             textColor={resolvedTextColor}
-            availableWidth={availableWidth}
-            markdownPalette={markdownPalette}
-            onToggleCollapsed={onToggleCollapsed}
-            onBuildFast={onBuildFast}
-            onBuildMax={onBuildMax}
-            isLastMessage={isLastMessage}
-            contentToCopy={isUser ? content : undefined}
-          />
-        </box>
-      ) : (
-        <UserContentWithCopyButton
-          content={content}
-          messageId={messageId}
-          isLoading={isLoading}
-          isComplete={isComplete}
-          isUser={isUser}
-          textColor={resolvedTextColor}
-          codeBlockWidth={markdownOptions.codeBlockWidth}
-          palette={markdownOptions.palette}
-          showCopyButton={isUser}
-        />
-      )}
-      {/* Show attachments for user messages */}
-      {isUser &&
-        ((attachments && attachments.length > 0) ||
-          (textAttachments && textAttachments.length > 0)) && (
-          <MessageAttachments
-            imageAttachments={attachments ?? []}
-            textAttachments={textAttachments ?? []}
+            codeBlockWidth={markdownOptions.codeBlockWidth}
+            palette={markdownOptions.palette}
+            showCopyButton={isUser}
           />
         )}
+        {/* Show attachments for user messages */}
+        {isUser &&
+          ((attachments && attachments.length > 0) ||
+            (textAttachments && textAttachments.length > 0) ||
+            (fileAttachments && fileAttachments.length > 0)) && (
+            <MessageAttachments
+              imageAttachments={attachments ?? []}
+              textAttachments={textAttachments ?? []}
+              fileAttachments={fileAttachments ?? []}
+            />
+          )}
+      </box>
 
       {/* Display runtime error banner for AI messages */}
       {isAi && userError && <UserErrorBanner error={userError} />}

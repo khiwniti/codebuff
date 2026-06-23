@@ -1,6 +1,7 @@
-import { validateSingleAgent } from '@codebuff/common/templates/agent-validation'
-import { DynamicAgentTemplateSchema } from '@codebuff/common/types/dynamic-agent-template'
-import { getErrorObject } from '@codebuff/common/util/error'
+import { validateSingleAgent } from '@khiwniti/common/templates/agent-validation'
+import { DynamicAgentTemplateSchema } from '@khiwniti/common/types/dynamic-agent-template'
+import { getErrorObject } from '@khiwniti/common/util/error'
+import { truncateString } from '@khiwniti/common/util/string'
 import z from 'zod/v4'
 
 import { WEBSITE_URL } from '../constants'
@@ -25,9 +26,9 @@ import type {
   GetUserInfoFromApiKeyOutput,
   StartAgentRunFn,
   UserColumn,
-} from '@codebuff/common/types/contracts/database'
-import type { DynamicAgentTemplate } from '@codebuff/common/types/dynamic-agent-template'
-import type { ParamsOf } from '@codebuff/common/types/function-params'
+} from '@khiwniti/common/types/contracts/database'
+import type { DynamicAgentTemplate } from '@khiwniti/common/types/dynamic-agent-template'
+import type { ParamsOf } from '@khiwniti/common/types/function-params'
 
 type CachedUserInfo = Partial<
   NonNullable<Awaited<GetUserInfoFromApiKeyOutput<UserColumn>>>
@@ -355,6 +356,7 @@ export async function finishAgentRun(
     totalSteps,
     directCredits,
     totalCredits,
+    errorMessage,
     logger,
   } = params
 
@@ -375,6 +377,11 @@ export async function finishAgentRun(
           totalSteps,
           directCredits,
           totalCredits,
+          // Truncate: errorMessage can include a full stack trace
+          errorMessage:
+            errorMessage === undefined
+              ? undefined
+              : truncateString(errorMessage, 5000),
         }),
       },
       logger,

@@ -1,37 +1,36 @@
-import { getErrorObject } from '@codebuff/common/util/error'
-import { assistantMessage } from '@codebuff/common/util/messages'
+import { HandleStepsYieldValueSchema } from '@khiwniti/common/types/agent-template'
+import { getErrorObject } from '@khiwniti/common/util/error'
+import { assistantMessage } from '@khiwniti/common/util/messages'
 import { cloneDeep } from 'lodash'
 
 import { clearProposedContentForRun } from './tools/handlers/tool/proposed-content-store'
 import { executeToolCall } from './tools/tool-executor'
 import { parseTextWithToolCalls } from './util/parse-tool-calls-from-text'
 
-import type { ParsedSegment } from './util/parse-tool-calls-from-text'
 
 import type { FileProcessingState } from './tools/handlers/tool/write-file'
 import type { ExecuteToolCallParams } from './tools/tool-executor'
-import type { CodebuffToolCall } from '@codebuff/common/tools/list'
-import { HandleStepsYieldValueSchema } from '@codebuff/common/types/agent-template'
-
+import type { ParsedSegment } from './util/parse-tool-calls-from-text'
+import type { CodebuffToolCall } from '@khiwniti/common/tools/list'
 import type {
   AgentTemplate,
   StepGenerator,
   PublicAgentState,
-} from '@codebuff/common/types/agent-template'
+} from '@khiwniti/common/types/agent-template'
 import type {
   HandleStepsLogChunkFn,
   SendActionFn,
-} from '@codebuff/common/types/contracts/client'
-import type { AddAgentStepFn } from '@codebuff/common/types/contracts/database'
-import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
-import type { ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
+} from '@khiwniti/common/types/contracts/client'
+import type { AddAgentStepFn } from '@khiwniti/common/types/contracts/database'
+import type { Logger } from '@khiwniti/common/types/contracts/logger'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
+import type { ToolMessage } from '@khiwniti/common/types/messages/codebuff-message'
 import type {
   ToolCallPart,
   ToolResultOutput,
-} from '@codebuff/common/types/messages/content-part'
-import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
-import type { AgentState } from '@codebuff/common/types/session-state'
+} from '@khiwniti/common/types/messages/content-part'
+import type { PrintModeEvent } from '@khiwniti/common/types/print-mode'
+import type { AgentState } from '@khiwniti/common/types/session-state'
 // Maintains generator state for all agents. Generator state can't be serialized, so we store it in memory.
 const runIdToGenerator: Record<string, StepGenerator | undefined> = {}
 export const runIdToStepAll: Set<string> = new Set()
@@ -43,6 +42,20 @@ export function clearAgentGeneratorCache(params: { logger: Logger }) {
     delete runIdToGenerator[key]
   }
   runIdToStepAll.clear()
+}
+
+/**
+ * Release all module-level state held for a run: the handleSteps generator
+ * (whose closure retains the full agent state and message history), the
+ * STEP_ALL flag, and any proposed file content. Safe to call for runs with
+ * no programmatic state. Must run whenever a run's loop exits — including
+ * abort and error paths, not just endTurn — or the state leaks for the
+ * lifetime of the process.
+ */
+export function clearProgrammaticRunState(runId: string): void {
+  delete runIdToGenerator[runId]
+  runIdToStepAll.delete(runId)
+  clearProposedContentForRun(runId)
 }
 
 // Function to handle programmatic agents
@@ -82,8 +95,9 @@ export async function runProgrammaticStep(
     | 'fileProcessingState'
     | 'toolCallId'
     | 'toolCalls'
+    | 'toolCallsToAddToMessageHistory'
     | 'toolResults'
-    | 'toolResultsToAddAfterStream'
+    | 'toolResultsToAddToMessageHistory'
   > &
     ParamsExcluding<
       AddAgentStepFn,
@@ -104,17 +118,17 @@ export async function runProgrammaticStep(
   const {
     agentState,
     template,
-    clientSessionId,
+    clientSessionId: _clientSessionId,
     prompt,
     toolCallParams,
     nResponses,
-    system,
-    userId,
+    system: _system,
+    userId: _userId,
     userInputId,
-    repoId,
-    fingerprintId,
+    repoId: _repoId,
+    fingerprintId: _fingerprintId,
     onResponseChunk,
-    localAgentTemplates,
+    localAgentTemplates: _localAgentTemplates,
     stepsComplete,
     handleStepsLogChunk,
     sendAction,
@@ -138,16 +152,16 @@ export async function runProgrammaticStep(
   if (!generator) {
     const createLogMethod =
       (level: 'debug' | 'info' | 'warn' | 'error') =>
-      (data: any, msg?: string) => {
-        logger[level](data, msg) // Log to backend
-        handleStepsLogChunk({
-          userInputId,
-          runId: agentState.runId ?? 'undefined',
-          level,
-          data,
-          message: msg,
-        })
-      }
+        (data: any, msg?: string) => {
+          logger[level](data, msg) // Log to backend
+          handleStepsLogChunk({
+            userInputId,
+            runId: agentState.runId ?? 'undefined',
+            level,
+            data,
+            message: msg,
+          })
+        }
 
     const streamingLogger = {
       debug: createLogMethod('debug'),
@@ -194,7 +208,7 @@ export async function runProgrammaticStep(
     firstFileProcessed: false,
   }
   const agentContext = cloneDeep(agentState.agentContext)
-  const sendSubagentChunk = (data: {
+  const _sendSubagentChunk = (data: {
     userInputId: string
     agentId: string
     agentType: string
@@ -244,7 +258,7 @@ export async function runProgrammaticStep(
       if (!parseResult.success) {
         throw new Error(
           `Invalid yield value from handleSteps in agent ${template.id}: ${parseResult.error.message}. ` +
-            `Received: ${JSON.stringify(result.value)}`,
+          `Received: ${JSON.stringify(result.value)}`,
         )
       }
 
@@ -335,9 +349,8 @@ export async function runProgrammaticStep(
   } catch (error) {
     endTurn = true
 
-    const errorMessage = `Error executing handleSteps for agent ${template.id}: ${
-      error instanceof Error ? error.message : 'Unknown error'
-    }`
+    const errorMessage = `Error executing handleSteps for agent ${template.id}: ${error instanceof Error ? error.message : 'Unknown error'
+      }`
     logger.error(
       { error: getErrorObject(error), template: template.id },
       errorMessage,
@@ -377,9 +390,7 @@ export async function runProgrammaticStep(
     }
   } finally {
     if (endTurn) {
-      delete runIdToGenerator[agentState.runId]
-      runIdToStepAll.delete(agentState.runId)
-      clearProposedContentForRun(agentState.runId)
+      clearProgrammaticRunState(agentState.runId)
     }
   }
 }
@@ -429,7 +440,8 @@ type ExecuteToolCallsArrayParams = Omit<
   | 'autoInsertEndStepParam'
   | 'excludeToolFromMessageHistory'
   | 'toolCallId'
-  | 'toolResultsToAddAfterStream'
+  | 'toolCallsToAddToMessageHistory'
+  | 'toolResultsToAddToMessageHistory'
 > & {
   agentState: AgentState
   onResponseChunk: (chunk: string | PrintModeEvent) => void
@@ -486,6 +498,7 @@ async function executeSingleToolCall(
     // })
   }
 
+  const toolResultsToAddToMessageHistory: ToolMessage[] = []
   // Execute the tool call
   await executeToolCall({
     ...params,
@@ -495,7 +508,9 @@ async function executeSingleToolCall(
     excludeToolFromMessageHistory,
     fromHandleSteps: true,
     toolCallId,
-    toolResultsToAddAfterStream: [],
+    toolCalls: [],
+    toolCallsToAddToMessageHistory: [],
+    toolResultsToAddToMessageHistory,
 
     onResponseChunk: (chunk: string | PrintModeEvent) => {
       if (typeof chunk === 'string') {
@@ -539,6 +554,9 @@ async function executeSingleToolCall(
       onResponseChunk(chunk)
     },
   })
+
+  agentState.messageHistory = [...agentState.messageHistory]
+  agentState.messageHistory.push(...toolResultsToAddToMessageHistory)
 
   // Get the latest tool result
   return toolResults[toolResults.length - 1]?.content

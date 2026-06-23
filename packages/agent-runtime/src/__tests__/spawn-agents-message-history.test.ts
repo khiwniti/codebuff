@@ -1,11 +1,11 @@
-import { TEST_USER_ID } from '@codebuff/common/old-constants'
-import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
+import { TEST_USER_ID } from '@khiwniti/common/old-constants'
+import { TEST_AGENT_RUNTIME_IMPL } from '@khiwniti/common/testing/impl/agent-runtime'
+import { getInitialSessionState } from '@khiwniti/common/types/session-state'
 import {
   assistantMessage,
   systemMessage,
   userMessage,
-} from '@codebuff/common/util/messages'
+} from '@khiwniti/common/util/messages'
 import {
   describe,
   expect,
@@ -20,9 +20,9 @@ import { mockFileContext } from './test-utils'
 import * as runAgentStep from '../run-agent-step'
 import { handleSpawnAgents } from '../tools/handlers/tool/spawn-agents'
 
-import type { CodebuffToolCall } from '@codebuff/common/tools/list'
-import type { AgentTemplate } from '@codebuff/common/types/agent-template'
-import type { ParamsExcluding } from '@codebuff/common/types/function-params'
+import type { CodebuffToolCall } from '@khiwniti/common/tools/list'
+import type { AgentTemplate } from '@khiwniti/common/types/agent-template'
+import type { ParamsExcluding } from '@khiwniti/common/types/function-params'
 
 describe('Spawn Agents Message History', () => {
   let mockSendSubagentChunk: any
@@ -90,7 +90,7 @@ describe('Spawn Agents Message History', () => {
     inputSchema: {
       prompt: {
         safeParse: () => ({ success: true }),
-      } as any,
+      } as unknown as AgentTemplate['inputSchema']['prompt'],
     },
     spawnerPrompt: '',
     model: '',
