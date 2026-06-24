@@ -1,6 +1,6 @@
 {
   "name": "openbuff",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Openbuff CLI - AI Coding Assistant with NVIDIA NIM",
   "license": "MIT",
   "bin": {

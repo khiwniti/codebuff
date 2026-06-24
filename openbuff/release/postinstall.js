@@ -9,7 +9,7 @@ const binaryPath = path.join(
   os.homedir(),
   '.config',
   'manicode',
-  process.platform === 'win32' ? 'codebuff.exe' : 'codebuff'
+  process.platform === 'win32' ? 'openbuff.exe' : 'openbuff'
 );
 
 try {
@@ -24,11 +24,11 @@ console.log('🎉 Welcome to Codebuff!');
 console.log('\n');
 console.log('To get started:');
 console.log('  1. cd to your project directory');
-console.log('  2. Run: codebuff');
+console.log('  2. Run: openbuff');
 console.log('\n');
 console.log('Example:');
 console.log('  $ cd ~/my-project');
-console.log('  $ codebuff');
+console.log('  $ openbuff');
 console.log('\n');
-console.log('For more information, visit: https://codebuff.com/docs');
+console.log('For more information, visit: https://openbuff.com/docs');
 console.log('\n');
