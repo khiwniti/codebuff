@@ -11,7 +11,7 @@ const zlib = require('zlib')
 const tar = require('tar')
 const { createReleaseHttpClient } = require('./http')
 
-const packageName = 'openbuff'
+const packageName = 'codebuff'
 
 /**
  * Terminal escape sequences to reset terminal state after the child process exits.
@@ -58,7 +58,7 @@ function createConfig(packageName) {
     configDir,
     binaryName,
     binaryPath: path.join(configDir, binaryName),
-    metadataPath: path.join(configDir, 'openbuff-metadata.json'),
+    metadataPath: path.join(configDir, 'codebuff-metadata.json'),
     tempDownloadDir: path.join(configDir, '.download-temp'),
     userAgent: `${packageName}-cli`,
     requestTimeout: 20000,
@@ -100,7 +100,7 @@ function trackUpdateFailed(errorMessage, version, context = {}) {
 
     const payload = JSON.stringify({
       api_key: posthogConfig.apiKey,
-      event: 'cli.update_openbuff_failed',
+      event: 'cli.update_codebuff_failed',
       properties: {
         distinct_id: `anonymous-${CONFIG.homeDir}`,
         error: errorMessage,
