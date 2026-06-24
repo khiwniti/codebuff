@@ -47,20 +47,29 @@ function resetTerminal() {
   }
 }
 
+// packageName is used to download the binary from server
+// Keep as 'codebuff' to download existing codebuff releases
+const packageName = 'codebuff'
+
+// But the CLI binary name for users should be 'openbuff'
+const CLI_NAME = 'openbuff'
+
 function createConfig(packageName) {
   const homeDir = os.homedir()
   const configDir = path.join(homeDir, '.config', 'manicode')
+  // Use CLI_NAME for the saved binary, not packageName
   const binaryName =
-    process.platform === 'win32' ? `${packageName}.exe` : packageName
+    process.platform === 'win32' ? `${CLI_NAME}.exe` : CLI_NAME
 
   return {
     homeDir,
     configDir,
     binaryName,
     binaryPath: path.join(configDir, binaryName),
-    metadataPath: path.join(configDir, 'codebuff-metadata.json'),
+    // Use CLI_NAME for metadata so openbuff has its own version tracking
+    metadataPath: path.join(configDir, `${CLI_NAME}-metadata.json`),
     tempDownloadDir: path.join(configDir, '.download-temp'),
-    userAgent: `${packageName}-cli`,
+    userAgent: `${CLI_NAME}-cli`,
     requestTimeout: 20000,
   }
 }
@@ -100,7 +109,7 @@ function trackUpdateFailed(errorMessage, version, context = {}) {
 
     const payload = JSON.stringify({
       api_key: posthogConfig.apiKey,
-      event: 'cli.update_codebuff_failed',
+      event: 'cli.update__failed',
       properties: {
         distinct_id: `anonymous-${CONFIG.homeDir}`,
         error: errorMessage,
